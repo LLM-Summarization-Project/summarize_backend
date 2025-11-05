@@ -1,35 +1,44 @@
-# ---------- 1️⃣ Install dependencies (include devDeps for build)
-FROM node:20-slim AS deps
+# ==========================================
+# 🏗️ Stage 1: Build the NestJS application
+# ==========================================
+FROM node:20-alpine AS builder
+
+# Create app directory
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@9 --activate
-COPY package.json pnpm-lock.yaml* ./
-# Include devDependencies so nest CLI is available
-RUN pnpm install --no-frozen-lockfile
+# Copy package files first (for better caching)
+COPY package*.json ./
 
-# ---------- 2️⃣ Build the app
-FROM node:20-slim AS build
-WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# Install all dependencies (including dev)
+RUN npm ci
 
-# Copy everything needed for build
-COPY --from=deps /app/node_modules ./node_modules
+# Copy the full source
 COPY . .
 
-# Run build (Nest CLI now available)
-RUN pnpm build
+# Build the NestJS app
+RUN npm run build
 
-# ---------- 3️⃣ Runtime (production only)
-FROM node:20-slim AS runner
+
+# ==========================================
+# 🚀 Stage 2: Run the production server
+# ==========================================
+FROM node:20-alpine AS runner
+
 WORKDIR /app
-ENV NODE_ENV=production
 
-# Copy only compiled code and prod dependencies
-COPY --from=build /app/dist ./dist
-COPY package.json pnpm-lock.yaml* ./
+# Copy only necessary files from builder
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/dist ./dist
 
 # Install only production dependencies
-RUN corepack enable && corepack prepare pnpm@9 --activate && pnpm install --prod --frozen-lockfile
+RUN npm ci --omit=dev
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=20s CMD node -e "require('http').get('http://localhost:'+(process.env.PORT||3000)+'/health',res=>{if(res.statusCode!==200)process.exit(1)}).on('error',()=>process.exit(1))"
+# Expose the port that NestJS listens on
+EXPOSE 3000
+
+# Health check (optional)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s \
+  CMD wget --spider -q http://localhost:3000 || exit 1
+
+# Start the app
 CMD ["node", "dist/main.js"]
