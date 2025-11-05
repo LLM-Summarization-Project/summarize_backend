@@ -5,7 +5,7 @@ WORKDIR /app
 # If you use PNPM (recommended)
 RUN corepack enable && corepack prepare pnpm@9 --activate
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 
 FROM node:20-slim AS build
 WORKDIR /app
