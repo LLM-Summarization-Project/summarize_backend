@@ -1,0 +1,15 @@
+# Ignore local dependencies and build artifacts
+node_modules
+dist
+.env
+npm-debug.log
+Dockerfile
+.dockerignore
+.git
+.gitignore
+.idea
+.vscode
+
+# Ignore test and config files not needed for build
+coverage
+*.spec.ts
