@@ -50,6 +50,18 @@ from openpyxl import load_workbook
 
 EXCEL_LOG = "stat.xlsx"
 
+_progress_fp = None
+try:
+    _progress_fp = os.fdopen(3, "w", buffering=1, encoding="utf-8")  # line-buffered
+except Exception:
+    _progress_fp = None
+
+def send_progress(step: str, percent: int):
+    if _progress_fp:
+        _progress_fp.write(json.dumps({"type":"progress","step":step,"percent":percent}) + "\n")
+        _progress_fp.flush()
+    # ไม่แตะ stdout เด็ดขาด
+    
 if sys.platform.startswith('win'):
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -60,7 +72,6 @@ if sys.platform.startswith('win'):
 
 # ====== CONFIG ======
 YOUTUBE_URL = "https://youtu.be/Rq7plosixd0?si=-Xw05o5mTZd-eTBt"
-# YOUTUBE_URL = "https://www.youtube.com/watch?v=M8g9-Bn5X9g"
 AUDIO_OUT = "audio.wav"
 FRAMES_DIR = "frames"
 SCENES_JSON = "scenes.json"
@@ -72,17 +83,16 @@ log = functools.partial(print, file=sys.stderr, flush=True)
 
 LANGUAGE = "th"
 WHISPER_MODEL = "large-v3-turbo"
-ASR_DEVICE = "cpu"      # ใหม่
+ASR_DEVICE = "cpu"      
 VL_DEVICE  = "cuda"     # ใช้กับ Florence เท่านั้น
 
-# VL_MODEL_NAME = "microsoft/Florence-2-large"
 VL_MODEL_NAME = "microsoft/Florence-2-base"
 SCENE_THRESH = 0.6
 ENABLE_OCR = False
 
 # ใช้ 127.0.0.1 กันปัญหา IPv6/localhost บางเครื่อง
 OLLAMA_API = os.environ.get("OLLAMA_API", "http://127.0.0.1:11434/api/generate")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3:8b")  # หรือ "llama3.2:3b"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3:8b")  
 
 # ===== NEW OUTPUT NAMES =====
 DROPDOWN_JSON = "dropdown_items.json"           # สำหรับ UI dropdown
@@ -1157,6 +1167,7 @@ def main():
     download_t = time.time()
     download_time = download_t - t0
     pbar.update(1)
+    send_progress("โหลดวิดีโอเสร็จสิ้น", 10)
 
     # 2) Transcript (บังคับไทย)
     pbar.set_description("🗣️ Step 2: Speech to text")
@@ -1164,6 +1175,7 @@ def main():
     asr_t = time.time()
     asr_time = asr_t - download_t
     pbar.update(2)
+    send_progress("ถอดเสียงเสร็จสิ้น", 60)
     # with open(TRANSCRIPT_TXT, "r", encoding="utf-8") as f:
     #     transcript = f.read()
 
@@ -1179,17 +1191,20 @@ def main():
 
     facts = split_text_to_scenes(transcript, scene_ts)
     facts = enrich_scenes_with_captions(facts, caps)
+    frames_count = len(caps)
     with open(SCENE_FACTS_JSON, "w", encoding="utf-8") as f:
         json.dump([asdict(x) for x in facts], f, ensure_ascii=False, indent=2)
     log(f"✅ Scene facts saved -> {SCENE_FACTS_JSON}")
     cap_t = time.time()
     cap_time = cap_t - asr_t
     pbar.update(4)
+    send_progress("สร้างคำบรรยายภาพเสร็จสิ้น", 80)
 
     # 4) สรุปเฉพาะ "Transcript + Visual"
     pbar.set_description("🧠 Step 4: : ทำสรุป")
     items = summarize_transcript_plus_visual_items(transcript, facts, max_items=8)
     pbar.update(2)
+    send_progress("ทำสรุปเสร็จสิ้น", 90)
 
     # 5) Save dropdown + bullets + article
     pbar.set_description("💾 Step 5: สร้างสรุปแบบบทความ + บันทึกผลลัพธ์")
@@ -1229,7 +1244,6 @@ def main():
     
         # === LOG TO EXCEL ===
     try:
-        frames_count = len([f for f in os.listdir(FRAMES_DIR) if f.lower().endswith(".jpg")]) if os.path.isdir(FRAMES_DIR) else 0
         scenes_count = len(scene_ts) if isinstance(scene_ts, list) else None
         captions_count = len(caps) if isinstance(caps, list) else None
         bullets_count = len(items) if isinstance(items, list) else None
@@ -1292,6 +1306,7 @@ def main():
         log(f"⚠️ Statistic logging failed: {e}")
     pbar.update(1)
     pbar.close()
+    send_progress("เสร็จสมบูรณ์", 100)
 
 
 if __name__ == "__main__":

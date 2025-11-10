@@ -25,10 +25,11 @@ def main():
     p.add_argument("--summary_id", default=str(int(time.time())))
     args = p.parse_args()
 
-    os.makedirs(args.out_dir, exist_ok=True)
-    prefix = os.path.join(args.out_dir, args.summary_id + '_')
+    # โฟลเดอร์สำหรับ summary เดียวกัน เช่น outputs/A/
+    summary_dir = os.path.join(args.out_dir, args.summary_id)
+    os.makedirs(summary_dir, exist_ok=True)
 
-    # map เข้า full.py
+    # ตั้งค่า path ทั้งหมดในโฟลเดอร์เดียวกัน
     pipeline.YOUTUBE_URL  = args.youtube_url
     pipeline.SCENE_THRESH = args.scene_thresh
     pipeline.ENABLE_OCR   = bool(args.enable_ocr)
@@ -44,16 +45,16 @@ def main():
         os.environ["OLLAMA_MODEL"] = args.ollama_model
         pipeline.OLLAMA_MODEL = args.ollama_model
 
-    pipeline.AUDIO_OUT         = prefix + "audio.wav"
-    pipeline.FRAMES_DIR        = prefix + "frames"
-    pipeline.SCENES_JSON       = prefix + "scenes.json"
-    pipeline.CAPTIONS_JSON     = prefix + "captions.json"
-    pipeline.SCENE_FACTS_JSON  = prefix + "scene_facts.json"
-    pipeline.TRANSCRIPT_TXT    = prefix + "transcription.txt"
-    pipeline.DROPDOWN_JSON     = prefix + "dropdown_items.json"
-    pipeline.FINAL_TXT         = prefix + "dropdown_list.txt"
-    pipeline.FINAL_ARTICLE_TXT = prefix + "final_article_th.txt"
-    pipeline.METRICS_JSON = prefix + "metrics.json"
+    pipeline.AUDIO_OUT         = os.path.join(summary_dir, "audio.wav")
+    pipeline.FRAMES_DIR        = os.path.join(summary_dir, "frames")
+    pipeline.SCENES_JSON       = os.path.join(summary_dir, "scenes.json")
+    pipeline.CAPTIONS_JSON     = os.path.join(summary_dir, "captions.json")
+    pipeline.SCENE_FACTS_JSON  = os.path.join(summary_dir, "scene_facts.json")
+    pipeline.TRANSCRIPT_TXT    = os.path.join(summary_dir, "transcription.txt")
+    pipeline.DROPDOWN_JSON     = os.path.join(summary_dir, "dropdown_items.json")
+    pipeline.FINAL_TXT         = os.path.join(summary_dir, "dropdown_list.txt")
+    pipeline.FINAL_ARTICLE_TXT = os.path.join(summary_dir, "summary.txt")
+    pipeline.METRICS_JSON      = os.path.join(summary_dir, "metrics.json")
 
     # รัน pipeline
     pipeline.main()
@@ -65,7 +66,7 @@ def main():
                 return f.read()
         except Exception:
             return None
-        
+
     metrics = None
     try:
         import json as _json
@@ -73,7 +74,7 @@ def main():
             with open(pipeline.METRICS_JSON, "r", encoding="utf-8") as f:
                 metrics = _json.load(f)
     except Exception as e:
-        print(f"⚠️ Read metrics failed: {e}", file=sys.stderr, flush=True)
+        print(json.dumps({"status": "error", "errorMessage": str(e)}, ensure_ascii=False), flush=True)
 
     result = {
         "transcript_path": pipeline.TRANSCRIPT_TXT,
@@ -83,9 +84,11 @@ def main():
         "scene_facts_path":pipeline.SCENE_FACTS_JSON,
         "article_preview": _safe_read(pipeline.FINAL_ARTICLE_TXT)[:800] if os.path.exists(pipeline.FINAL_ARTICLE_TXT) else None,
         "metrics": metrics,
+        "status": "ok"
     }
     sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
     sys.stdout.flush()
+
 
 if __name__ == "__main__":
     main()
