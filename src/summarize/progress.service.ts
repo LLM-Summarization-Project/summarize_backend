@@ -16,7 +16,7 @@ export class ProgressService {
 
   /** ✅ เปิด stream สำหรับ jobId ที่ frontend จะ subscribe */
   stream(jobId: string): Observable<ProgressEvent> {
-    console.log('🧷 Subscribed:', jobId);
+    // console.log('🧷 Subscribed:', jobId);
     if (!this.channels.has(jobId)) {
       this.channels.set(jobId, new Subject());
     }
@@ -25,7 +25,7 @@ export class ProgressService {
 
   /** ✅ ปล่อย event ใหม่ออกไป (เรียกจาก QueueEventsListener หรือ worker) */
   emit(jobId: string, payload: ProgressEvent) {
-    console.log('📤 Emit event to job', jobId, payload);
+    // console.log('📤 Emit event to job', jobId, payload);
     if (!this.channels.has(jobId)) {
       this.channels.set(jobId, new Subject());
     }

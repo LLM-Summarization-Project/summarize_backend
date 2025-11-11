@@ -107,7 +107,7 @@ const worker = new Worker(
           if (msg?.type === 'progress') {
             const percent = Math.max(
               0,
-              Math.min(100, Number(msg.percent) || 0),
+              Math.min(99, Number(msg.percent) || 0),
             );
             await job.updateProgress({ percent });
             await prisma.summary.update({
@@ -197,6 +197,7 @@ const worker = new Worker(
                 durationSec: metrics.duration_sec,
               },
             });
+            await job.updateProgress({ percent: 100 });
 
             resolve();
           } catch (e: any) {

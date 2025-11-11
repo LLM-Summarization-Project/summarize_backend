@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from './prisma/prisma.service';
 import { randomUUID } from 'crypto';
 import { QueueService } from 'src/queue/queue.service';
+import path from 'path';
+import * as fs from 'fs/promises';
 
 @Injectable()
 export class SummarizeService {
@@ -44,9 +46,23 @@ export class SummarizeService {
 
     const normalizedPath = data.summaryPath?.replace(/\\/g, '/');
 
+    const filepath = path.resolve(normalizedPath || '');
+    const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
+    // console.log('filepath:', filepath);
+    // console.log('rawContent:', rawContent);
+
+    if (!filepath) {
+      return {
+        status: 'summary_file_not_found',
+      };
+    }
+
+    const content = rawContent?.replace(/\r\n/g, '');
+    // console.log('content:', content);
+
     return {
-      ...data,
-      summaryPath: normalizedPath,
+      keyword: data.keyword,
+      summary: content,
     };
   }
 }
