@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from './prisma/prisma.service';
 import { randomUUID } from 'crypto';
 import { QueueService } from 'src/queue/queue.service';
+import path from 'path';
+import * as fs from 'fs/promises';
 
 @Injectable()
 export class SummarizeService {
@@ -23,16 +25,44 @@ export class SummarizeService {
     return { jobId: id, status: 'QUEUED' as const };
   }
 
-  getSummary(id: string) {
-    return this.prisma.summary.findUnique({ where: { id } }) ?? 'not_found';
+  async getSummary(id: string) {
+    const summary = await this.prisma.summary.findUnique({ where: { id } });
+
+    if (!summary) {
+      return { status: 'not_found' };
+    }
+    return summary;
   }
 
-  getOntologyData(id: string) {
-    return (
-      this.prisma.summary.findUnique({
-        where: { id },
-        select: { keyword: true, summaryPath: true },
-      }) ?? 'not_found'
-    );
+  async getOntologyData(id: string) {
+    const data = await this.prisma.summary.findUnique({
+      where: { id },
+      select: { keyword: true, summaryPath: true },
+    });
+
+    if (!data) {
+      return { status: 'not_found' };
+    }
+
+    const normalizedPath = data.summaryPath?.replace(/\\/g, '/');
+
+    const filepath = path.resolve(normalizedPath || '');
+    const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
+    // console.log('filepath:', filepath);
+    // console.log('rawContent:', rawContent);
+
+    if (!filepath) {
+      return {
+        status: 'summary_file_not_found',
+      };
+    }
+
+    const content = rawContent?.replace(/\r\n/g, '');
+    // console.log('content:', content);
+
+    return {
+      keyword: data.keyword,
+      summary: content,
+    };
   }
 }

@@ -1278,7 +1278,7 @@ def main():
         log(f"⚠️ Statistic logging failed: {e}")
     pbar.update(1)
     pbar.close()
-    send_progress("เสร็จสมบูรณ์", 100)
+    send_progress("กำลังอัปเดต DB", 99)
 
 
 if __name__ == "__main__":

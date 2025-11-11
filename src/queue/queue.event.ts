@@ -20,7 +20,7 @@ export class QueueEventsListener implements OnModuleInit, OnModuleDestroy {
 
     // ฟัง event progress
     this.queueEvents.on('progress', ({ jobId, data }: { jobId: string, data: any}) => {
-      console.log('Progress event:', jobId, data);
+    //   console.log('Progress event:', jobId, data);
       this.progressService.emit(String(jobId), { jobId: String(jobId), ...data });
     });
 
