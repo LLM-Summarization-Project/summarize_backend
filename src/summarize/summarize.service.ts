@@ -26,4 +26,13 @@ export class SummarizeService {
   getSummary(id: string) {
     return this.prisma.summary.findUnique({ where: { id } }) ?? 'not_found';
   }
+
+  getOntologyData(id: string) {
+    return (
+      this.prisma.summary.findUnique({
+        where: { id },
+        select: { keyword: true, summaryPath: true },
+      }) ?? 'not_found'
+    );
+  }
 }
