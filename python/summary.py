@@ -522,6 +522,20 @@ def transcribe_whisper(wav_path: str, model_name: str, language: str, device: st
     log("✅ Transcription done.")
     return text
 
+def iapp_asr_api(wav_path: str, wav_name: str) -> str:
+    url = "https://api.iapp.co.th/asr/v3"
+    payload = {'use_asr_pro': '1', 'chunk_size': '7'} #Set to '1' for iApp ASR PRO
+    files=[('file',(wav_name,open(wav_path,'rb'),'application/octet-stream'))]
+    headers = {'apikey': 'demo'}
+
+    response = requests.request("POST", url, headers=headers, data=payload, files=files)
+    data = json.loads(response.text)
+    textlist = [item["text"] for item in data["output"]]
+    text = " ".join(textlist)
+    with open(TRANSCRIPT_TXT, "w", encoding="utf-8") as f: f.write(text)
+    log("✅ Transcription done.")
+    return text
+
 # ====== STEP 3: Image Captioning (+ optional OCR) ======
 def clean_tags(tags):
     out = []
@@ -1139,6 +1153,7 @@ def main():
     # 2) Transcript (บังคับไทย)
     pbar.set_description("🗣️ Step 2: Speech to text")
     transcript = transcribe_whisper(AUDIO_OUT, WHISPER_MODEL, LANGUAGE, ASR_DEVICE)
+    # transcript = iapp_asr_api(AUDIO_OUT, "audio.wav")
     asr_t = time.time()
     asr_time = asr_t - download_t
     pbar.update(2)
