@@ -1,44 +1,40 @@
-# ==========================================
-# 🏗️ Stage 1: Build the NestJS application
-# ==========================================
-FROM node:20-alpine AS builder
+# ========= Base with Python/FFmpeg (Debian, wheels เยอะกว่า) =========
+FROM node:20-bookworm-slim AS base
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv python3-pip ffmpeg curl ca-certificates git \
+ && ln -sf /usr/bin/python3 /usr/bin/python \
+ && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
+# ========= Stage 1: Build (Node + Prisma) =========
+FROM base AS builder
 WORKDIR /app
-
-# Copy package files first (for better caching)
 COPY package*.json ./
-
-# Install all dependencies (including dev)
 RUN npm ci
+COPY prisma ./prisma
+RUN npx prisma generate
 
-# Copy the full source
+COPY requirements.txt ./
+RUN python3 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+ && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+ 
+COPY python ./python
 COPY . .
-
-# Build the NestJS app
 RUN npm run build
 
-
-# ==========================================
-# 🚀 Stage 2: Run the production server
-# ==========================================
-FROM node:20-alpine AS runner
-
+# ========= Stage 2: Runtime =========
+FROM base AS runner
 WORKDIR /app
-
-# Copy only necessary files from builder
-COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/python ./python
 
-# Install only production dependencies
-RUN npm ci --omit=dev
+# ✅ เพิ่มสองบรรทัดนี้
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
 
-# Expose the port that NestJS listens on
+RUN npm prune --omit=dev
 EXPOSE 3000
-
-# Health check (optional)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s \
-  CMD wget --spider -q http://localhost:3000 || exit 1
-
-# Start the app
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/src/worker/main.js"]
