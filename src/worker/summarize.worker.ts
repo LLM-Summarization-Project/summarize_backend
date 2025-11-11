@@ -12,7 +12,10 @@ const concurrency = Number(process.env.BULL_CONCURRENCY ?? 2); // ปรับ�
 const worker = new Worker(
   QUEUE,
   async (job: Job) => {
-    const { summaryId, youtubeUrl } = job.data as { summaryId: string; youtubeUrl: string };
+    const { summaryId, youtubeUrl } = job.data as {
+      summaryId: string;
+      youtubeUrl: string;
+    };
 
     // mark RUNNING
     await prisma.summary.update({
@@ -20,23 +23,36 @@ const worker = new Worker(
       data: { status: 'RUNNING', startedAt: new Date(), percent: 0 },
     });
 
-    const outputsDir = path.resolve(process.cwd(), 'outputs');
+    const user = 'user1'; // temporary user
+    const outputsDir = path.resolve(process.cwd(), 'outputs', user);
     const runnerPath = path.resolve(process.cwd(), 'python', 'runner.py');
 
     const py = spawn(
       process.env.PYTHON_BIN ?? 'python',
       [
         runnerPath,
-        '--youtube_url', youtubeUrl,
-        '--out_dir', outputsDir,
-        '--scene_thresh', process.env.SCENE_THRESH ?? '0.6',
-        '--language', process.env.LANGUAGE ?? 'th',
-        '--asr_device', process.env.ASR_DEVICE ?? 'cpu',
-        '--vl_device', process.env.VL_DEVICE ?? 'cpu',
-        '--whisper_model', process.env.WHISPER_MODEL ?? 'large-v3-turbo',
-        ...(process.env.OLLAMA_API   ? ['--ollama_api', process.env.OLLAMA_API]     : []),
-        ...(process.env.OLLAMA_MODEL ? ['--ollama_model', process.env.OLLAMA_MODEL] : []),
-        '--summary_id', summaryId,
+        '--youtube_url',
+        youtubeUrl,
+        '--out_dir',
+        outputsDir,
+        '--scene_thresh',
+        process.env.SCENE_THRESH ?? '0.6',
+        '--language',
+        process.env.LANGUAGE ?? 'th',
+        '--asr_device',
+        process.env.ASR_DEVICE ?? 'cpu',
+        '--vl_device',
+        process.env.VL_DEVICE ?? 'cpu',
+        '--whisper_model',
+        process.env.WHISPER_MODEL ?? 'large-v3-turbo',
+        ...(process.env.OLLAMA_API
+          ? ['--ollama_api', process.env.OLLAMA_API]
+          : []),
+        ...(process.env.OLLAMA_MODEL
+          ? ['--ollama_model', process.env.OLLAMA_MODEL]
+          : []),
+        '--summary_id',
+        summaryId,
       ],
       {
         env: {
@@ -89,8 +105,11 @@ const worker = new Worker(
         try {
           const msg = JSON.parse(t);
           if (msg?.type === 'progress') {
-            const percent = Math.max(0, Math.min(100, Number(msg.percent) || 0));
-            await job.updateProgress(percent);
+            const percent = Math.max(
+              0,
+              Math.min(100, Number(msg.percent) || 0),
+            );
+            await job.updateProgress({ percent });
             await prisma.summary.update({
               where: { id: summaryId },
               data: { status: 'RUNNING', percent },
@@ -123,7 +142,11 @@ const worker = new Worker(
         const finishError = async (msg: string) => {
           await prisma.summary.update({
             where: { id: summaryId },
-            data: { status: 'ERROR', errorMessage: msg, finishedAt: new Date() },
+            data: {
+              status: 'ERROR',
+              errorMessage: msg,
+              finishedAt: new Date(),
+            },
           });
         };
 
@@ -136,7 +159,9 @@ const worker = new Worker(
             const result = JSON.parse(lastLine);
             const metrics = result.metrics;
             if (result?.status && result.status !== 'ok') {
-              await finishError(result?.errorMessage ?? 'Python returned error status.');
+              await finishError(
+                result?.errorMessage ?? 'Python returned error status.',
+              );
               return reject(new Error('python-error-status'));
             }
 
@@ -163,6 +188,7 @@ const worker = new Worker(
                 bulletCount: metrics.bullets,
                 transcriptWord: metrics.transcript_words,
                 summaryWord: metrics.article_words,
+                keyword: metrics.keyword,
                 timeDownloadSec: metrics.t_download,
                 timeSpeechtoTextSec: metrics.t_asr,
                 timeCaptionImageSec: metrics.t_caption,
@@ -185,7 +211,9 @@ const worker = new Worker(
                 await finishError(r?.errorMessage ?? `exit ${code}`);
                 return reject(new Error(r?.errorMessage ?? `exit ${code}`));
               }
-            } catch { /* ignore */ }
+            } catch {
+              /* ignore */
+            }
           }
           await finishError(stderr || `exit ${code}`);
           reject(new Error(stderr || `exit ${code}`));

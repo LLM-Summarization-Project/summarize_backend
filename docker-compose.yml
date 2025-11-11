@@ -1,19 +1,19 @@
 services:
   api:
     build: .
-    command: node dist/main.js
+    command: node dist/src/main.js
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       BULL_CONCURRENCY: 2
     depends_on: [redis]
-    ports: ["3000:3000"]
+    ports: ["4001:4001"]
     restart: unless-stopped
 
   worker:
     build: .
-    command: node dist/workers/summarize.worker.js
+    command: node dist/src/worker/summarize.worker.js
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_HOST: redis

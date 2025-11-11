@@ -101,27 +101,31 @@ FINAL_ARTICLE_TXT = "final_article_th.txt"      # บทความสั้น
 
 # ===== STRONG THAI-ONLY SYSTEM (อัปเดตให้เข้มแบบร้อยแก้วไทย) =====
 SYSTEM_PROMPT_TH = (
-    "คุณเป็นผู้สรุปภาษาไทยที่เขียนแบบ 'เรียงความ' ชัดเจน กระชับ อ่านลื่นไหล "
-    "ห้ามใช้หัวข้อย่อย/สัญลักษณ์บูลเล็ต/ตัวเลขนำหน้า ห้ามคัดลอกคำสั่งหรือใส่คำนำแนว Meta "
-    "หากอ้างสิ่งที่ยืนยันด้วยภาพ ให้แทรกคำว่า (จากภาพ) แบบสั้นในวงเล็บภายในประโยค "
-    "หลีกเลี่ยงการพูดซ้ำ ย้ำตัวเลขเดิมได้ครั้งเดียว และอย่าใช้ภาษาอังกฤษยกเว้นชื่อเฉพาะจำเป็นจริง ๆ"
+    "คุณคือผู้สรุปข่าวภาษาไทย ใช้สำนวนข่าวเล่าเรื่อง กระชับ ชัดเจน ไม่ใช้หัวข้อย่อยหรือบูลเล็ต "
+    "หลีกเลี่ยงการพูดซ้ำ และหากอ้างสิ่งที่ยืนยันด้วยภาพให้แทรก (จากภาพ) ภายในประโยค "
+    "คงชื่อเฉพาะ/ตัวย่อ/ตัวเลขตามต้นฉบับ"
 )
 
 # ===== NEW: Generation presets (minimal-safe) =====
 GEN_OPTS_QUALITY = {
-    "temperature": 0.25,
+    "temperature": 0.7,        # ใกล้ default ของ Ollama
     "top_p": 0.9,
     "top_k": 40,
-    "repeat_penalty": 1.6,
-    "num_ctx": 4096,
-    "stop": ["\n- ", "\n• ", "\n\n- "],  # กันหลุดเป็นบูลเล็ตในงานบทความ
+    "repeat_penalty": 1.15,    # ลดจาก 1.6 -> 1.15 เพื่อลดประหลาด/ซ้ำ
+    "repeat_last_n": 256,      # สำคัญมากสำหรับกันวน
+    "num_ctx": 8192,           # llama3 8B รองรับ ~8k
+    "num_predict": 1024,       # เพดานกว้างพอสำหรับบทความสั้น
+    "stop": ["<|eot_id|>", "</s>"],  # stop ของ Llama 3
 }
 GEN_OPTS_FAST = {
-    "temperature": 0.3,
+    "temperature": 0.6,
     "top_p": 0.9,
-    "top_k": 30,
-    "repeat_penalty": 1.55,
-    "num_ctx": 4096,
+    "top_k": 40,
+    "repeat_penalty": 1.12,
+    "repeat_last_n": 256,
+    "num_ctx": 8192,
+    "num_predict": 512,
+    "stop": ["<|eot_id|>", "</s>"],
 }
 
 # ===== NEW: Word count helpers (TH/EN mix safe) =====
@@ -188,8 +192,9 @@ def looks_thai(s: str) -> bool:
 # ===== NEW: sanitize options + healthcheck + fallback /api/chat =====
 ALLOWED_OLLAMA_KEYS = {
     "temperature", "top_p", "top_k",
-    "repeat_penalty", "num_ctx",
-    "stop", "seed", "num_predict",
+    "repeat_penalty", "repeat_last_n",
+    "num_ctx", "num_predict",
+    "stop", "seed",
 }
 
 def sanitize_ollama_options(opts: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -231,7 +236,7 @@ def ollama_summarize(
     prompt: str,
     options: Optional[Dict[str, Any]] = None,
     system: Optional[str] = None,
-    stream: bool = True,
+    stream: bool = False,           # ปิดสตรีมเพื่อความเสถียรและจับข้อความครบ
     timeout: int = 600,
 ) -> str:
     base = OLLAMA_API
@@ -242,52 +247,24 @@ def ollama_summarize(
 
     ollama_ensure_model(OLLAMA_MODEL, base)
 
-    gen_url = base
-    gen_payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": stream, "system": system}
+    chat_base = base.rsplit("/", 1)[0] + "/chat"
     opts = sanitize_ollama_options(options)
+    payload = {
+        "model": OLLAMA_MODEL,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+    }
     if opts:
-        gen_payload["options"] = opts
+        payload["options"] = opts
 
-    try:
-        resp = _post_json(gen_url, gen_payload, stream=stream, timeout=timeout)
-        if resp.status_code == 405:
-            raise requests.HTTPError("405 on /api/generate", response=resp)
-        if not stream:
-            data = resp.json()
-            return (data.get("response") or "").strip()
-        out = ""
-        for line in resp.iter_lines():
-            if line:
-                data = json.loads(line.decode("utf-8"))
-                if "response" in data:
-                    out += data["response"]
-                if data.get("done"):
-                    break
-        return out.strip()
-    except Exception as e:
-        chat_base = base.rsplit("/", 1)[0] + "/chat"
-        chat_payload = {
-            "model": OLLAMA_MODEL,
-            "stream": False,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-        }
-        if opts:
-            chat_payload["options"] = opts
-        resp2 = requests.post(chat_base, json=chat_payload, timeout=timeout)
-        try:
-            resp2.raise_for_status()
-        except Exception as e2:
-            raise RuntimeError(
-                f"❌ Ollama ล้มเหลวทั้ง /api/generate และ /api/chat\n"
-                f"- generate error: {e}\n- chat error: {e2}\n"
-                f"คำแนะนำ: ตรวจรุ่นที่ติดตั้ง, ลอง `ollama list` และ `ollama pull {OLLAMA_MODEL}`"
-            )
-        data = resp2.json()
-        msg = (data.get("message") or {}).get("content", "")
-        return (msg or "").strip()
+    resp = requests.post(chat_base, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    msg = (data.get("message") or {}).get("content", "")
+    return (msg or "").strip()
 
 def ensure_thai(text: str, max_chars: int = None) -> str:
     t = (text or "").strip()
@@ -1083,16 +1060,17 @@ def summarize_article_th(transcript: str,
 
     # ---- prompt หลัก (เน้นไม่ให้แก้ชื่อ แต่ไม่ใช้ lock) ----
     prompt = f"""
-{FEWSHOT_REF}
-
 เขียน "บทความภาษาไทยแบบเล่าเรื่อง" ความยาวประมาณ {target_min_words}-{target_max_words} คำ 
 โดยอ้างอิง TRANSCRIPT ด้านล่างเป็นหลัก และผสาน "หลักฐานจากภาพ" เท่าที่จำเป็น
-ข้อกำหนด:
-- เขียนเป็น 2–4 ย่อหน้า (ห้ามใช้หัวข้อย่อย/บูลเล็ต/เลขลิสต์)
-- ห้ามพูดซ้ำใจความเดิมหรือตัวเลขเดิมเกิน 1 ครั้ง
-- ใช้คำเชื่อมให้ลื่นไหล อ่านเข้าใจตั้งแต่ต้นจนจบ
-- อ้างภาพเฉพาะที่เสริมสาระจริง ๆ ด้วยวงเล็บ (จากภาพ) ภายในประโยค
-- หลีกเลี่ยงการแก้ไข/สะกดใหม่ชื่อเฉพาะ ตัวย่อ ชื่อบุคคล องค์กร เครื่องมือ และเลขสถิติ
+**ข้อกำหนดการเขียน**
+- อินโทรเกริ่นภาพรวมสั้น ๆ เพื่อให้เข้าใจว่าประเด็นหลักคืออะไรและทำไมสำคัญ  
+- จากนั้นอธิบายเนื้อหาหลักแบบต่อเนื่อง 2–4 ย่อหน้า (ห้ามใช้หัวข้อย่อย/บูลเล็ต/เลขลิสต์)  
+- ห้ามพูดซ้ำใจความเดิมหรือตัวเลขเดิมเกิน 1 ครั้ง  
+- ใช้คำเชื่อมให้ลื่นไหล อ่านเข้าใจตั้งแต่ต้นจนจบ  
+- ถ้ามีข้อมูลจากภาพ ให้แทรกไว้ในประโยคเป็น (จากภาพ) เพื่อชี้ว่าเป็นหลักฐานเชิงสายตา  
+- ห้ามขึ้นต้นด้วยคำว่า "สวัสดี", "วันนี้", "บทความนี้", "เราจะมาดู"  
+- หลีกเลี่ยงการเปลี่ยนชื่อเฉพาะ/ตัวย่อ/ชื่อบุคคล/ตัวเลขใน TRANSCRIPT  
+- ปิดท้ายด้วยข้อคิดหรือข้อสังเกตเชิงเหตุผลสั้น ๆ ที่สอดคล้องกับเนื้อหา  
 
 [TRANSCRIPT]
 {transcript_src}
@@ -1103,11 +1081,33 @@ def summarize_article_th(transcript: str,
 
     # ---- เรียก LLM "ครั้งเดียว" ----
     # ถ้า GEN_OPTS_QUALITY มีอยู่แล้วจะใช้เลย; เสริม temp ต่ำเพื่อลดการ "แก้ชื่อ" โดยพลการ
-    GEN_OPTS = {**GEN_OPTS_QUALITY, "temperature": 0.2, "stop": ["Here is", "###", "\n- ", "\n• "]}
+    GEN_OPTS = {
+        **GEN_OPTS_QUALITY,
+        "num_predict": 900,   # ~900 token พอสำหรับ 300-400 คำไทย
+    }
     raw = ensure_thai(ollama_summarize(prompt, options=GEN_OPTS)) or ""
-
-    log("======= Final Article (Single-pass, No-Lock) =======")
+    
     return raw
+
+def extract_single_keyword_th(text: str) -> str:
+    """
+    ใช้ LLM สกัด 'คำสำคัญหลัก' เพียงคำเดียว (ภาษาไทย) จากข้อความที่ให้มา
+    """
+    prompt = f"""
+อ่านบทความต่อไปนี้ แล้วตอบเพียงคำเดียวที่เป็น "คำสำคัญหลัก" เท่านั้น
+- ห้ามพูดเกินหนึ่งคำ
+- ห้ามเติมคำอธิบาย
+- ตัวอย่าง: ถ้าบทความพูดถึงการเมือง ให้ตอบว่า การเมือง
+- ให้ตอบเฉพาะคำเดียวเช่นนั้น
+
+[บทความ]
+{text}
+"""
+    out = ollama_summarize(prompt, options={"temperature": 0.2, "num_ctx": 1024})
+    # ตัดบรรทัด/เว้นวรรคให้เหลือแค่คำเดียว
+    keyword = out.strip().split()[0]
+    keyword = re.sub(r"[^\wก-๙]", "", keyword)
+    return keyword or "ไม่พบคำสำคัญ"
 
 def _safe_word_count(path: str):
     try:
@@ -1118,39 +1118,6 @@ def _safe_word_count(path: str):
             return len(tokens)
     except Exception:
         return None
-
-def _append_run_to_excel(row_dict: dict, excel_path: str = EXCEL_LOG, sheet_name: str = "stat"):
-    df = pd.DataFrame([row_dict])
-
-    if Path(excel_path).exists():
-        # หาแถวสุดท้ายของชีต (ถ้ามี)
-        try:
-            book = load_workbook(excel_path, data_only=True)
-            if sheet_name in book.sheetnames:
-                startrow = book[sheet_name].max_row  # แถวถัดไป
-            else:
-                startrow = 0
-        finally:
-            # ลดโอกาสไฟล์ล็อกบน Windows
-            try:
-                book.close()
-            except Exception:
-                pass
-
-        # เขียนต่อท้ายโดยไม่ยุ่งกับ writer.book
-        with pd.ExcelWriter(excel_path, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-            df.to_excel(
-                writer,
-                sheet_name=sheet_name,
-                index=False,
-                header=(startrow == 0),  # ถ้าไม่มี header เก่า ให้เขียน header
-                startrow=startrow
-            )
-    else:
-        # สร้างไฟล์ใหม่ + header
-        with pd.ExcelWriter(excel_path, engine="openpyxl", mode="w") as writer:
-            df.to_excel(writer, sheet_name=sheet_name, index=False, header=True)
-
 
 # ====== (อัปเดต) MAIN: ผลิตเฉพาะ transcript+visual ======
 def main():
@@ -1217,6 +1184,8 @@ def main():
     article_th = summarize_article_th(transcript, items, target_min_words=300, target_max_words=400)
     with open(FINAL_ARTICLE_TXT, "w", encoding="utf-8") as f:
         f.write(wrap_text(article_th))
+        
+    main_keyword = extract_single_keyword_th(article_th)
     
     summarize_t = time.time()
     summarize_time = summarize_t - cap_t
@@ -1267,6 +1236,7 @@ def main():
             "bullets": bullets_count,
             "transcript_words": transcript_words,
             "article_words": article_words,
+            "keyword": main_keyword,
             # ---- OUTPUT FILES ----
             # "audio_out": AUDIO_OUT,
             # "scenes_json": SCENES_JSON,
@@ -1283,6 +1253,8 @@ def main():
             "t_total": None,  # จะเติมด้านล่าง
             "duration_sec": round(duration, 2) if isinstance(duration, (int, float)) else None,
         }
+        
+        log(" keyword: " + main_keyword)
 
         # เติมเวลารวม (หากมีตัวแปร t0/t1 อยู่แล้ว)
         try:
