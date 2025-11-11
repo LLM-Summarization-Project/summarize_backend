@@ -1,0 +1,58 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SummaryStatus {
+  QUEUED
+  RUNNING
+  DONE
+  ERROR
+}
+
+model Summary {
+  id                      String          @id @default(uuid())
+  youtubeUrl              String
+  status                  SummaryStatus   @default(QUEUED)
+  percent                 Int             @default(0)
+  startedAt               DateTime        @default(now())
+  finishedAt              DateTime?
+
+  transcriptPath          String?
+  bulletPath              String?
+  summaryPath             String?
+  sceneFactsPath          String?
+  keyword                 String?
+
+  whisperModel            String?
+  asrDevice               String?
+  vlDevice                String?
+  vlModel                 String?
+  sceneThresh             Float?
+  enableOcr               Boolean?
+
+  frames                  Int?
+  bulletCount             Int?
+  transcriptWord          Int?
+  summaryWord             Int?
+  timeDownloadSec         Float?
+  timeSpeechtoTextSec     Float?
+  timeCaptionImageSec     Float?
+  timeSummarizeSec        Float?
+  timeTotal               Float?
+  durationSec             Float?
+
+  errorMessage  String?    @db.Text
+
+  @@index([status, startedAt])
+}
