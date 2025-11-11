@@ -23,16 +23,30 @@ export class SummarizeService {
     return { jobId: id, status: 'QUEUED' as const };
   }
 
-  getSummary(id: string) {
-    return this.prisma.summary.findUnique({ where: { id } }) ?? 'not_found';
+  async getSummary(id: string) {
+    const summary = await this.prisma.summary.findUnique({ where: { id } });
+
+    if (!summary) {
+      return { status: 'not_found' };
+    }
+    return summary;
   }
 
-  getOntologyData(id: string) {
-    return (
-      this.prisma.summary.findUnique({
-        where: { id },
-        select: { keyword: true, summaryPath: true },
-      }) ?? 'not_found'
-    );
+  async getOntologyData(id: string) {
+    const data = await this.prisma.summary.findUnique({
+      where: { id },
+      select: { keyword: true, summaryPath: true },
+    });
+
+    if (!data) {
+      return { status: 'not_found' };
+    }
+
+    const normalizedPath = data.summaryPath?.replace(/\\/g, '/');
+
+    return {
+      ...data,
+      summaryPath: normalizedPath,
+    };
   }
 }

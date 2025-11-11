@@ -82,7 +82,7 @@ export class SummarizeController {
       example: {
         keyword: 'สแกมเมอร์',
         summaryPath:
-          'C:\\Users\\North\\Desktop\\college\\year4sem1\\project prep\\summarize-backend\\outputs\\user1\\24aee79e-3560-488d-b05b-da801ab44c0b\\summary.txt',
+          'C:/Users/North/Desktop/college/year4sem1/project prep/summarize-backend/outputs/user1/24aee79e-3560-488d-b05b-da801ab44c0b/summary.txt',
       },
     },
   })
