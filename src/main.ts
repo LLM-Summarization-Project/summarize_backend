@@ -6,9 +6,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const allowList = [
-    process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000',
-    'http://127.0.0.1:3000',
-    'http://25.28.124.88:3000',
+    process.env.FRONTEND_ORIGIN ?? 'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://25.28.124.88:8080',
     /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}(:\d+)?$/,  // 192.168.x.x[:port]
     /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/, // 10.x.x.x
   ];
