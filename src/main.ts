@@ -5,15 +5,24 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000';
+  const allowList = [
+    process.env.FRONTEND_ORIGIN ?? 'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://25.28.124.88:8080',
+    /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}(:\d+)?$/,  // 192.168.x.x[:port]
+    /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/, // 10.x.x.x
+  ];
 
   app.enableCors({
-    origin: FRONTEND_ORIGIN,                // ห้ามใช้ '*'
+    origin(origin, cb) {
+      if (!origin) return cb(null, true); // curl/postman หรือ same-origin
+      const ok = allowList.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin));
+      cb(ok ? null : new Error('CORS blocked'), ok);
+    },
     credentials: true,                      // ต้องเปิดถ้าใช้ withCredentials
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-    // ถ้า reverse proxy มีการ buffer SSE อาจต้อง expose header/ปิด buffer ด้วย
-    // exposedHeaders: ['Content-Type'],
+    exposedHeaders: ['Content-Type'],
   });
 
   if (process.env.NODE_ENV !== 'production') {

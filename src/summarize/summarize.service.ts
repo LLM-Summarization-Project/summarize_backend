@@ -18,6 +18,7 @@ export class SummarizeService {
     await this.prisma.summary.create({
       data: { id, youtubeUrl, status: 'QUEUED' },
     });
+    console.log(`Created summary record with ID: ${id}`);
 
     // ส่งงานเข้า BullMQ
     await this.queueService.addRunJob({ summaryId: id, youtubeUrl });
@@ -27,6 +28,7 @@ export class SummarizeService {
 
   async getSummary(id: string) {
     const summary = await this.prisma.summary.findUnique({ where: { id } });
+    console.log(summary)
 
     if (!summary) {
       return { status: 'not_found' };

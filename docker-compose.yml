@@ -1,28 +1,32 @@
 services:
-  api:
-    build: .
-    command: node dist/src/main.js
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      BULL_CONCURRENCY: 2
-    depends_on: [redis]
-    ports: ["4001:4001"]
-    restart: unless-stopped
-
-  worker:
-    build: .
-    command: node dist/src/worker/summarize.worker.js
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      BULL_CONCURRENCY: 2
-    depends_on: [redis]
-    restart: unless-stopped
-
   redis:
     image: redis:7
+    container_name: redis-local
     ports: ["6379:6379"]
-    restart: unless-stopped
+
+  api:
+    # build: .
+    image: northpat/summarize-backend:latest
+    env_file: 
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    command: ["node","dist/src/main.js"]
+    ports: ["4001:4001"]
+    depends_on: [redis]
+    volumes:
+      - ./outputs:/app/dist/outputs
+
+  worker:
+    # build: .
+    image: northpat/summarize-backend:latest
+    env_file: 
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    command: ["node","dist/src/worker/summarize.worker.js"]
+    depends_on: [redis]
+    volumes:
+      - ./outputs:/app/dist/outputs
