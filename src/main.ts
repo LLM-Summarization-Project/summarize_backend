@@ -13,17 +13,17 @@ async function bootstrap() {
     /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/, // 10.x.x.x
   ];
 
-  app.enableCors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true); // curl/postman หรือ same-origin
-      const ok = allowList.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin));
-      cb(ok ? null : new Error('CORS blocked'), ok);
-    },
-    credentials: true,                      // ต้องเปิดถ้าใช้ withCredentials
-    methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    exposedHeaders: ['Content-Type'],
-  });
+  // app.enableCors({
+  //   origin(origin, cb) {
+  //     if (!origin) return cb(null, true); // curl/postman หรือ same-origin
+  //     const ok = allowList.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin));
+  //     cb(ok ? null : new Error('CORS blocked'), ok);
+  //   },
+  //   credentials: true,                      // ต้องเปิดถ้าใช้ withCredentials
+  //   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  //   allowedHeaders: ['Content-Type', 'Authorization'],
+  //   exposedHeaders: ['Content-Type'],
+  // });
 
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()
