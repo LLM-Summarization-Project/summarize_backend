@@ -13,3 +13,5 @@ tqdm==4.66.5
 requests==2.31.0
 pythainlp==5.1.2
 numpy==1.26.4
+einops==0.8.1
+timm==1.0.20
