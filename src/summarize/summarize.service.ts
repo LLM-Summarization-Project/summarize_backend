@@ -28,7 +28,7 @@ export class SummarizeService {
 
   async getSummary(id: string) {
     const summary = await this.prisma.summary.findUnique({ where: { id } });
-    console.log(summary)
+    // console.log(summary)
 
     if (!summary) {
       return { status: 'not_found' };
