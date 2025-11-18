@@ -34,7 +34,6 @@ class _StderrLogger:
 import io, json, time, base64, shutil, subprocess, re, math
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Any, Optional
-from tqdm import tqdm
 from pythainlp.tokenize import word_tokenize
 
 import requests
@@ -56,9 +55,9 @@ try:
 except Exception:
     _progress_fp = None
 
-def send_progress(step: str, percent: int):
+def send_progress(step: str, percent: int, subprogress: int):
     if _progress_fp:
-        _progress_fp.write(json.dumps({"type":"progress","step":step,"percent":percent}) + "\n")
+        _progress_fp.write(json.dumps({"type":"progress","step":step,"percent":percent,"subprogress": subprogress}) + "\n")
         _progress_fp.flush()
     # ไม่แตะ stdout เด็ดขาด
     
@@ -513,13 +512,41 @@ def download_video_file(url: str) -> str:
     return sorted(candidates, key=os.path.getsize, reverse=True)[0]
 
 # ====== STEP 2: ASR (Whisper) ======
-def transcribe_whisper(wav_path: str, model_name: str, language: str, device: str) -> str:
+
+def transcribe_whisper(
+    wav_path: str,
+    model_name: str,
+    language: str,
+    device: str,
+    step_start: int = 10,
+    step_end: int = 45,
+) -> str:
+    """
+    ถอดเสียงด้วย whisper ทั้งก้อน (ไม่ chunk) แต่ใช้ tqdm ภายใน whisper
+    เพื่อส่ง progress จริง ๆ ออกมาผ่าน send_progress()
+    subprocess = 1 (ถอดเสียง)
+    """
+
     model = whisper.load_model(model_name, device=device)
-    result = model.transcribe(wav_path, language=language, fp16=(device=="cuda"), temperature=0.0, verbose=False,)
+
+    result = model.transcribe(
+        wav_path,
+        language=language,
+        fp16=(device == "cuda"),
+        temperature=0.0,
+        verbose=False,  
+    )
+
     text = (result["text"] or "").strip()
     text = ensure_thai(text)
-    with open(TRANSCRIPT_TXT, "w", encoding="utf-8") as f: f.write(text)
+
+    with open(TRANSCRIPT_TXT, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    # เผื่อให้จบ step นี้แน่ ๆ = step_end
+    send_progress("ถอดเสียง", step_end, 100)
     log("✅ Transcription done.")
+
     return text
 
 def iapp_asr_api(wav_path: str, wav_name: str) -> str:
@@ -659,7 +686,8 @@ def stream_scene_frames_and_caption(url: str,
                                     frames_dir: str,
                                     thresh: float,
                                     out_json: str,
-                                    captioner: VisionCaptioner):
+                                    captioner: VisionCaptioner,
+                                    video_duration: float | None = None,):
     os.makedirs(frames_dir, exist_ok=True)
     delete_all_files_in_directory(frames_dir)
 
@@ -677,6 +705,10 @@ def stream_scene_frames_and_caption(url: str,
     results = []
     next_id = 1
     proc = None
+    processed = 0
+    estimated = 50
+    if not isinstance(video_duration, (int, float)) or video_duration <= 0:
+        video_duration = None
     try:
         # รัน ffmpeg แตกเฟรมฉาก + showinfo (stderr)
         cmd = [
@@ -726,6 +758,15 @@ def stream_scene_frames_and_caption(url: str,
                         "ocr_text": ""
                     })
                     log(f"🖼️ {os.path.basename(img_path)} @{ts:.2f}s -> captioned")
+                    processed += 1
+                    if video_duration is not None and ts is not None:
+                        ratio = max(0.0, min(ts / video_duration, 1.0))
+                        subprogress = int(ratio * 100)
+                    else:
+                        subprogress = min(100, int(processed / estimated * 100))
+                    percent = 45 + int((35 * subprogress) / 100)
+
+                    send_progress("สร้างคำบรรยายภาพ", percent, subprogress)  # 45–80%
 
                     # ลบภาพเฟรมทันที ลด IO/พื้นที่
                     try: os.remove(img_path)
@@ -1138,33 +1179,26 @@ def main():
     t0 = time.time()
     for c in ["ffmpeg", "ffprobe"]:
         check_cmd(c)
-        
-    pbar = tqdm(total=10, desc="🚀 Overall Progress", unit="step")
 
     # 1) (เลือก) โหลดเสียง + ตัดฉาก
-    pbar.set_description("🎧 Step 1: โหลดคลิปและดึง frames")
     download_audio_wav_16k(YOUTUBE_URL, AUDIO_OUT)
     duration = get_video_duration(AUDIO_OUT)
     download_t = time.time()
     download_time = download_t - t0
-    pbar.update(1)
-    send_progress("โหลดวิดีโอเสร็จสิ้น", 10)
+    send_progress("โหลดวิดีโอ", 10, 100)
 
     # 2) Transcript (บังคับไทย)
-    pbar.set_description("🗣️ Step 2: Speech to text")
-    transcript = transcribe_whisper(AUDIO_OUT, WHISPER_MODEL, LANGUAGE, ASR_DEVICE)
+    transcript = transcribe_whisper(AUDIO_OUT,WHISPER_MODEL,LANGUAGE,ASR_DEVICE,step_start=10,step_end=45)
     # transcript = iapp_asr_api(AUDIO_OUT, "audio.wav")
     asr_t = time.time()
     asr_time = asr_t - download_t
-    pbar.update(2)
-    send_progress("ถอดเสียงเสร็จสิ้น", 60)
+    send_progress("ถอดเสียง", 45, 100)
     # with open(TRANSCRIPT_TXT, "r", encoding="utf-8") as f:
     #     transcript = f.read()
 
     # 3) Caption + OCR
-    pbar.set_description("🖼️ Step 3: Image captioning")
     captioner = VisionCaptioner(VL_MODEL_NAME, VL_DEVICE)
-    stream_scene_frames_and_caption(YOUTUBE_URL, FRAMES_DIR, SCENE_THRESH, CAPTIONS_JSON, captioner)
+    stream_scene_frames_and_caption(YOUTUBE_URL, FRAMES_DIR, SCENE_THRESH, CAPTIONS_JSON, captioner, video_duration=duration)
     with open(CAPTIONS_JSON, "r", encoding="utf-8") as f:
         caps = json.load(f)
     scene_ts = [c["ts"] for c in caps if "ts" in c]
@@ -1179,17 +1213,13 @@ def main():
     log(f"✅ Scene facts saved -> {SCENE_FACTS_JSON}")
     cap_t = time.time()
     cap_time = cap_t - asr_t
-    pbar.update(4)
-    send_progress("สร้างคำบรรยายภาพเสร็จสิ้น", 80)
+    send_progress("สร้างคำบรรยายภาพ", 80, 100)
 
     # 4) สรุปเฉพาะ "Transcript + Visual"
-    pbar.set_description("🧠 Step 4: : ทำสรุป")
     items = summarize_transcript_plus_visual_items(transcript, facts, max_items=8)
-    pbar.update(2)
-    send_progress("ทำสรุปเสร็จสิ้น", 90)
+    send_progress("ทำสรุป", 85, 33)
 
     # 5) Save dropdown + bullets + article
-    pbar.set_description("💾 Step 5: สร้างสรุปแบบบทความ + บันทึกผลลัพธ์")
     with open(DROPDOWN_JSON, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
     bullets_txt = render_bullets(items)
@@ -1197,11 +1227,12 @@ def main():
         f.write(ensure_thai(bullets_txt, max_chars=900))
 
     article_th = summarize_article_th(transcript, items, target_min_words=300, target_max_words=400)
+    send_progress("ทำสรุป", 90, 67)
     with open(FINAL_ARTICLE_TXT, "w", encoding="utf-8") as f:
         f.write(wrap_text(article_th))
         
     main_keyword = extract_single_keyword_th(article_th)
-    
+    send_progress("ทำสรุป", 95, 100)
     summarize_t = time.time()
     summarize_time = summarize_t - cap_t
 
@@ -1291,9 +1322,7 @@ def main():
             log(f"⚠️ Metrics JSON write failed: {e}")
     except Exception as e:
         log(f"⚠️ Statistic logging failed: {e}")
-    pbar.update(1)
-    pbar.close()
-    send_progress("กำลังอัปเดต DB", 99)
+    send_progress("บันทึกข้อมูล", 99, 80)
 
 
 if __name__ == "__main__":

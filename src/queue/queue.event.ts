@@ -46,7 +46,7 @@ export class QueueEventsListener implements OnModuleInit, OnModuleDestroy {
       this.progressService.complete(String(jobId));
     });
 
-    console.log('✅ QueueEvents listener started.');
+    // console.log('✅ QueueEvents listener started.');
   }
 
   async onModuleDestroy() {
