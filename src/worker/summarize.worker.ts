@@ -77,7 +77,38 @@ const worker = new Worker(
     let outBuf = '';
     let stderr = '';
 
-    // STDOUT: เก็บบรรทัดสุดท้าย (เป็น JSON สรุป)
+    // 💡 helper: ดัก % จาก tqdm (เช่น " 27%|██▋       | 1552/5757 [...]")
+    const handleTqdmChunk = async (chunk: string) => {
+      const lines = chunk.split(/\r?\n/);
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+
+        // จับตัวเลขก่อน % แล้วตามด้วย |
+        const m = line.match(/(\d{1,3})%\s*\|/);
+        if (!m) continue;
+
+        const p = Number(m[1]);
+        if (Number.isNaN(p)) continue;
+
+        const subprogress = Math.max(0, Math.min(100, p));
+
+        const percent = 10 + Math.floor((subprogress * 35) / 100); // tqdm ช่วง ASR = 10-45%
+
+        await job.updateProgress({
+          percent,
+          step: 'ถอดเสียง',
+          subprogress: subprogress,
+        });
+
+        await prisma.summary.update({
+          where: { id: summaryId },
+          data: { status: 'RUNNING', percent },
+        });
+      }
+    };
+
+    // STDOUT: เก็บบรรทัดสุดท้าย (เป็น JSON สรุป) + ดัก tqdm เผื่อมันพ่น stdout
     py.stdout.on('data', (chunk: string) => {
       outBuf += chunk;
       const lines = outBuf.split(/\r?\n/);
@@ -86,16 +117,22 @@ const worker = new Worker(
         const t = line.trim();
         if (t) lastLine = t;
       }
+
+      // ดัก % จาก tqdm ที่อาจโผล่ใน stdout
+      void handleTqdmChunk(chunk);
     });
 
-    // STDERR: เก็บ error log
+    // STDERR: เก็บ error log + ดัก tqdm (ส่วนใหญ่ tqdm อยู่ตรงนี้)
     py.stderr.on('data', (d: string) => {
       const text = d.toString();
       console.error(`[${summaryId}]`, text);
       stderr += text;
+
+      // ดัก % จาก tqdm ที่พ่นบน stderr
+      void handleTqdmChunk(text);
     });
 
-    // FD3 = progress (JSON lines)
+    // FD3 = progress (JSON lines จาก pipeline)
     const progress = py.stdio[3] as NodeJS.ReadableStream;
     progress.setEncoding('utf8');
     progress.on('data', async (chunk: string) => {
@@ -109,7 +146,11 @@ const worker = new Worker(
               0,
               Math.min(99, Number(msg.percent) || 0),
             );
-            await job.updateProgress({ percent });
+            await job.updateProgress({
+              percent,
+              step: msg.step ?? '',
+              subprogress: msg.subprogress ?? '',
+            });
             await prisma.summary.update({
               where: { id: summaryId },
               data: { status: 'RUNNING', percent },
@@ -197,7 +238,11 @@ const worker = new Worker(
                 durationSec: metrics.duration_sec,
               },
             });
-            await job.updateProgress({ percent: 100 });
+            await job.updateProgress({
+              percent: 100,
+              step: 'บันทึกข้อมูล',
+              subprogress: 100,
+            });
 
             resolve();
           } catch (e: any) {
