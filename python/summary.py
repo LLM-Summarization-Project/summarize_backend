@@ -1157,10 +1157,6 @@ def summarize_transcript_plus_visual_items(
         text = ensure_thai(text, 220)
         visual_dropdown.append({"text": text})
 
-    # 5) เขียนไฟล์ dropdown_visual.json
-    with open("dropdown_visual.json", "w", encoding="utf-8") as f:
-        json.dump(visual_dropdown, f, ensure_ascii=False, indent=2)
-
     # 6) เตรียมรายการ transcript + visual แยกกันก่อน
     transcript_items: List[Dict[str, Any]] = [
         {"text": ensure_thai(k, 220), "source": "transcript"}
