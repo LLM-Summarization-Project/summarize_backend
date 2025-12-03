@@ -90,6 +90,19 @@ export class SummarizeController {
     return this.summarizeService.getOntologyData(id);
   }
 
+  @Post(':id/cancel')
+  @ApiCreatedResponse({
+    description: 'Cancel summary job by summaryId',
+    schema: {
+      example: {
+        status: 'CANCEL',
+      },
+    },
+  })
+  cancelSummary(@Param('id') id: string) {
+    return this.summarizeService.cancelSummary(id);
+  }
+
   // @Get()
   // findAll() {
   //   return this.summarizeService.findAll();
