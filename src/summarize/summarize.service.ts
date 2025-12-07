@@ -19,16 +19,16 @@ export class SummarizeService {
     });
   }
 
-  async createSummary(youtubeUrl: string) {
+  async createSummary(youtubeUrl: string, userId: number) {
     const id = randomUUID();
 
     await this.prisma.summary.create({
-      data: { id, youtubeUrl, status: 'QUEUED' },
+      data: { id, youtubeUrl, status: 'QUEUED', userId },
     });
     console.log(`Created summary record with ID: ${id}`);
 
     // ส่งงานเข้า BullMQ
-    await this.queueService.addRunJob({ summaryId: id, youtubeUrl });
+    await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId });
 
     return { jobId: id, status: 'QUEUED' as const };
   }
@@ -73,6 +73,38 @@ export class SummarizeService {
       keyword: data.keyword,
       summary: content,
     };
+  }
+
+  async getMySummary(userId: number) {
+    const summaries = await this.prisma.summary.findMany({
+      where: { userId, status: 'DONE' },
+      orderBy: { startedAt: 'asc' },
+      select: {
+        id: true,
+        youtubeUrl: true,
+        keyword: true,
+        summaryPath: true,
+      },
+    });
+
+    const summariesWithContent = await Promise.all(
+      summaries.map(async (summary) => {
+        if (summary.summaryPath) {
+          const normalizedPath = summary.summaryPath.replace(/\\/g, '/');
+          const filepath = path.resolve(normalizedPath);
+
+          try {
+            const rawContent = await fs.readFile(filepath, 'utf-8');
+            return { ...summary, summary: rawContent };
+          } catch (error) {
+            console.error(`Error reading file at ${filepath}:`, error);
+            return { ...summary, summary: null };
+          }
+        }
+        return { ...summary, summary: null };
+      }),
+    );
+    return summariesWithContent;
   }
 
   async cancelSummary(summaryId: string) {

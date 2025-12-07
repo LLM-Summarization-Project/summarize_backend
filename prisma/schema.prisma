@@ -36,15 +36,18 @@ model Summary {
   durationSec         Float?
   errorMessage        String?
   keyword             String?
+  userId              Int
+  user User @relation(fields: [userId], references: [id])
 
   @@index([status, startedAt])
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  username  String   @unique
+  id        Int       @id @default(autoincrement())
+  username  String    @unique
   password  String
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  summaries Summary[]
 }
 
 enum SummaryStatus {

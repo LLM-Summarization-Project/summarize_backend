@@ -4,9 +4,10 @@ import { AppService } from './app.service';
 import { SummarizeModule } from './summarize/summarize.module';
 import { QueueModule } from './queue/queue.module';
 import { ProgressModule } from './summarize/progress.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
-  imports: [SummarizeModule, QueueModule, ProgressModule],
+  imports: [AuthModule, SummarizeModule, QueueModule, ProgressModule],
   controllers: [AppController],
   providers: [AppService],
 })

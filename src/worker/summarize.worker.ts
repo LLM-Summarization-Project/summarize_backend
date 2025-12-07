@@ -12,9 +12,10 @@ const concurrency = Number(process.env.BULL_CONCURRENCY ?? 2); // ปรับ�
 const worker = new Worker(
   QUEUE,
   async (job: Job) => {
-    const { summaryId, youtubeUrl } = job.data as {
+    const { summaryId, youtubeUrl, userId } = job.data as {
       summaryId: string;
       youtubeUrl: string;
+      userId: number;
     };
 
     let cancelledByUser = false;
@@ -26,7 +27,7 @@ const worker = new Worker(
       data: { status: 'RUNNING', startedAt: new Date(), percent: 0 },
     });
 
-    const user = 'user1'; // temporary user
+    const user = userId.toString();
     const outputsDir = path.resolve(process.cwd(), 'outputs', user);
     const runnerPath = path.resolve(process.cwd(), 'python', 'runner.py');
 

@@ -25,8 +25,12 @@ export class QueueService {
     });
   }
 
-  addRunJob(data: { summaryId: string; youtubeUrl: string }) {
-    return this.queue.add('run', data, { jobId: data.summaryId });
+  addRunJob(data: { summaryId: string; youtubeUrl: string, userId: number }) {
+    return this.queue.add(
+      'run',
+      data,
+      { jobId: data.summaryId },
+    );
   }
 
   async clearQueue() {
@@ -56,6 +60,6 @@ export class QueueService {
       waiting,
       freeSlots,
       isBusy: freeSlots === 0,
-    }
+    };
   }
 }

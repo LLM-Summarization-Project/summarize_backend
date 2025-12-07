@@ -16,7 +16,7 @@ Reqs:
   - pip install transformers accelerate pillow
 """
 
-import os, sys, functools, redis
+import os, sys, functools
 os.environ["HF_ATTENTION_BACKEND"] = "PYTORCH_EAGER"
 os.environ["FLASH_ATTENTION_FORCE_DISABLE"] = "1"
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
