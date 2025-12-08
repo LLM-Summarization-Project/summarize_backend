@@ -5,6 +5,7 @@ import { QueueService } from 'src/queue/queue.service';
 import path from 'path';
 import * as fs from 'fs/promises';
 import Redis from 'ioredis';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class SummarizeService {
@@ -12,10 +13,11 @@ export class SummarizeService {
   constructor(
     private prisma: PrismaService,
     private queueService: QueueService,
+    private configService: ConfigService,
   ) {
     this.redis = new Redis({
-      host: process.env.REDIS_HOST ?? 'localhost',
-      port: Number(process.env.REDIS_PORT ?? 6379),
+      host: this.configService.get<string>('REDIS_HOST') ?? 'localhost',
+      port: Number(this.configService.get<number>('REDIS_PORT') ?? 6379),
     });
   }
 
@@ -35,12 +37,23 @@ export class SummarizeService {
 
   async getSummary(id: string) {
     const summary = await this.prisma.summary.findUnique({ where: { id } });
-    // console.log(summary)
 
     if (!summary) {
       return { status: 'not_found' };
     }
-    return summary;
+
+    let summaryContent: string | null = null;
+    if (summary.summaryPath && summary.status === 'DONE') {
+      try {
+        const normalizedPath = summary.summaryPath.replace(/\\/g, '/');
+        const filepath = path.resolve(normalizedPath);
+        summaryContent = await fs.readFile(filepath, 'utf-8');
+      } catch (error) {
+        console.error(`Failed to read summary file for ${id}:`, error);
+      }
+    }
+
+    return { ...summary, summary: summaryContent };
   }
 
   async getOntologyData(id: string) {
@@ -84,6 +97,8 @@ export class SummarizeService {
         youtubeUrl: true,
         keyword: true,
         summaryPath: true,
+        startedAt: true,
+        status: true,
       },
     });
 
