@@ -86,7 +86,7 @@ ASR_DEVICE = "cpu"
 VL_DEVICE  = "cuda"     # ใช้กับ Florence เท่านั้น
 
 VL_MODEL_NAME = "microsoft/Florence-2-base"
-SCENE_THRESH = 0.6
+SCENE_THRESH = 0.4
 ENABLE_OCR = False
 
 # ใช้ 127.0.0.1 กันปัญหา IPv6/localhost บางเครื่อง
@@ -997,11 +997,25 @@ def summarize_transcript_keypoints(transcript: str, min_items=4, max_items=8) ->
     bullets = [ensure_thai(b, 220) for b in bullets]
     return dedup_and_rerank(bullets, max_items=max_items)
 
-def summarize_visual_deltas(visual_notes: List[str],
-                            transcript_keys: List[str],
-                            max_new: int = 3) -> List[str]:
+def summarize_visual_deltas(
+    visual_notes: List[str],
+    transcript_keys: List[str],
+    max_new: int = 3,
+    min_new: int = 1,
+) -> List[str]:
+    """
+    สรุป 'ข้อเสริมจากภาพ' โดย:
+      - พยายามสร้างอย่างน้อย min_new ข้อ แต่ไม่เกิน max_new ข้อ (ถ้าเนื้อหาพอ)
+      - หลีกเลี่ยงการซ้ำกับ transcript_keys
+      - ถ้า LLM ให้มาน้อยกว่าที่ต้องการ จะมี fallback ดึงจาก visual_notes ตรง ๆ มาช่วยเติม
+    """
     if not visual_notes:
         return []
+
+    # กันพารามิเตอร์เพี้ยน
+    max_new = max(1, max_new)
+    min_new = max(1, min(min_new, max_new))
+
     prompt = f"""
 ตอบเป็นภาษาไทยล้วนเท่านั้น
 ห้ามใช้คำว่า "บูลเล็ต", "หัวข้อ", "สรุป", หรือขึ้นต้นด้วยหัวข้อประกาศ
@@ -1010,8 +1024,8 @@ def summarize_visual_deltas(visual_notes: List[str],
 จาก VISUAL NOTES ต่อไปนี้ สร้าง "บรรทัดเสริม" ที่เพิ่มสาระใหม่เท่านั้น
 - ห้ามซ้ำ/พาราฟเรสกับ "รายการแก่น" ด้านล่าง
 - ใช้เฉพาะสิ่งที่ภาพยืนยันได้จริง (ตัวเลข เปอร์เซ็นต์ ชื่อเฉพาะ หัวข้อบนจอ เวลา/ลิงก์)
+- อย่างน้อย {min_new} แต่ไม่เกิน {max_new} บรรทัด
 - ถ้ามาจากภาพ ให้ลงท้ายวงเล็บ (จากภาพ: …) สั้น ๆ
-- ไม่เกิน {max_new} บรรทัด
 
 === รายการแก่น (ห้ามซ้ำ) ===
 {chr(10).join(f"- {k}" for k in transcript_keys)}
@@ -1023,48 +1037,203 @@ def summarize_visual_deltas(visual_notes: List[str],
         prompt,
         options={**GEN_OPTS_FAST, "stop": ["\n\n", "\n• ", "\n- "]}
     ).strip()
+
     candidates = parse_bullets(out)
     candidates = [ensure_thai(clean_bullet(b), 220) for b in candidates]
     filtered = [c for c in candidates if not is_duplicate(c, transcript_keys, thr=0.58)]
     filtered = filter_bullets(filtered)
-    return dedup_and_rerank(filtered, max_items=max_new)
+
+    # จัดอันดับ + ตัดให้ไม่เกิน max_new ก่อน
+    filtered = dedup_and_rerank(filtered, max_items=max_new)
+
+    # ถ้าได้ครบขั้นต่ำแล้วก็จบเลย
+    if len(filtered) >= min_new:
+        return filtered
+
+    # ---------- FALLBACK: เติมจาก visual_notes โดยตรง ----------
+    fallback = list(filtered)
+    existing_for_dup = transcript_keys + fallback
+
+    for raw in visual_notes:
+        # ตัด timestamp แบบ [0.0–10.0s] ทิ้งก่อน
+        core = re.sub(r"^\[[^\]]+\]\s*", "", raw).strip()
+        if not core:
+            continue
+
+        candidate = ensure_thai(clean_bullet(core), 220)
+        if not candidate:
+            continue
+
+        # กันซ้ำกับทั้ง transcript และของที่มีอยู่แล้ว
+        if is_duplicate(candidate, existing_for_dup, thr=0.58):
+            continue
+
+        text = candidate
+        if not text.rstrip().endswith("(จากภาพ)"):
+            text = text.rstrip() + " (จากภาพ)"
+
+        fallback.append(text)
+        existing_for_dup.append(text)
+
+        if len(fallback) >= min_new:
+            break
+
+    # รอบสุดท้ายจัดอันดับอีกทีแต่พยายามไม่ไปลดจำนวนลงต่ำกว่า min_new
+    max_items = max(max_new, min_new)
+    final = dedup_and_rerank(fallback, max_items=max_items)
+
+    # ถ้าเผลอลดลงอีก (แทบจะไม่เกิด แต่กันไว้) ก็ส่ง fallback ตรง ๆ ไปเลย
+    if len(final) < min_new <= len(fallback):
+        return fallback
+
+    return final
+
 
 def summarize_transcript_global(transcript: str, max_items: int = 8, **kwargs) -> str:
     keys = summarize_transcript_keypoints(transcript, min_items=4, max_items=max_items)
     final = dedup_and_rerank(keys, max_items=max_items)
     return "\n".join(f"• {x}" for x in final)
 
+def pick_visual_captions_by_speech(
+    facts: List[SceneFacts],
+    max_items: int = 4,
+    max_per_scene_chars: int = 220,
+) -> List[str]:
+    """
+    เลือก visual_caption ที่สอดคล้องกับ speech มากที่สุดแบบง่าย ๆ:
+      - ต้องมี visual_caption ไม่ว่าง
+      - ให้คะแนนตามความยาวของ speech (ยิ่งยาวยิ่งมีเนื้อหา)
+      - เลือกคะแนนสูงสุดไม่เกิน max_items
+    """
+    candidates: List[tuple[int, str]] = []
+
+    for sc in facts:
+        if not sc.visual_caption or not sc.visual_caption.strip():
+            continue
+
+        # ความยาว speech ใช้เป็น score แบบง่าย ๆ (ไม่โดน end-start พัง)
+        score = len(sc.speech.strip())
+
+        vt = re.sub(r"\s+", " ", sc.visual_caption).strip()
+        if len(vt) > max_per_scene_chars:
+            vt = vt[:max_per_scene_chars]
+
+        vt = ensure_thai(vt, max_per_scene_chars)
+        candidates.append((score, vt))
+
+    # เรียงจาก score สูง -> ต่ำ แล้วหยิบมาไม่เกิน max_items
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return [cap for _, cap in candidates[:max_items]]
+
 def summarize_transcript_plus_visual_items(
     transcript: str,
     facts: List[SceneFacts],
     max_items: int = 8,
 ) -> List[Dict[str, Any]]:
-    keys = summarize_transcript_keypoints(transcript, min_items=4, max_items=max_items)
-    visual_notes = build_visual_corpus(facts, max_per_scene_chars=220)
-    max_new = max(1, math.floor(max_items / 3))
-    deltas = summarize_visual_deltas(visual_notes, keys, max_new=max_new)
-    combined = [{"text": ensure_thai(k, 220), "source": "transcript"} for k in keys] + \
-               [{"text": ensure_thai(d, 220), "source": "visual"} for d in deltas]
-    ranked = sorted(
-        enumerate(combined),
-        key=lambda t: (-score_informativeness(clean_bullet(t[1]["text"])), t[0])
+    # 1) keypoint จาก transcript
+    keys = summarize_transcript_keypoints(
+        transcript,
+        min_items=4,
+        max_items=max_items,
     )
+
+    # 2) สร้าง visual_notes จาก scene facts
+    visual_notes = pick_visual_captions_by_speech(facts, max_items=4)
+
+    # 3) สรุปจากภาพ "อย่างน้อย 4 ข้อ" (ถ้าข้อมูลพอ) และไม่เกิน 4
+    visual_only_items = summarize_visual_deltas(
+        visual_notes,
+        transcript_keys=[],     # ให้ LLM ไม่สนใจเรื่องกันซ้ำกับ transcript ในขั้นนี้
+        max_new=4,
+        min_new=4,
+    )
+
+    # 4) เตรียม dropdown (จากภาพ) สำหรับเขียนลงไฟล์แยก
+    visual_dropdown: List[Dict[str, str]] = []
+    for txt in visual_only_items:
+        text = txt.rstrip()
+        if "จากภาพ" not in text:
+            text = f"{text} (จากภาพ)"
+        text = ensure_thai(text, 220)
+        visual_dropdown.append({"text": text})
+
+    # 6) เตรียมรายการ transcript + visual แยกกันก่อน
+    transcript_items: List[Dict[str, Any]] = [
+        {"text": ensure_thai(k, 220), "source": "transcript"}
+        for k in keys
+    ]
+    visual_items: List[Dict[str, Any]] = [
+        {"text": v["text"], "source": "visual"}
+        for v in visual_dropdown
+    ]
+
+    # ---- KEY: บังคับให้มี visual อย่างน้อย 4 (ถ้ามีพอ และไม่เกิน max_items) ----
+    desired_visual = min(4, len(visual_items), max_items)
+
+    def info_score(item: Dict[str, Any]) -> int:
+        return score_informativeness(clean_bullet(item["text"]))
+
+    # จัดอันดับเฉพาะ visual ภายในกลุ่มตัวเอง
+    visual_ranked = sorted(
+        enumerate(visual_items),
+        key=lambda t: (-info_score(t[1]), t[0]),
+    )
+
     uniq: List[Dict[str, Any]] = []
     seen: List[str] = []
-    for _, item in ranked:
+    used_visual_idx: set[int] = set()
+
+    # 7) เลือก visual ให้ครบ desired_visual ก่อน (ไม่ใช้ is_duplicate ตัดทิ้ง)
+    for idx, item in visual_ranked:
+        if len(uniq) >= desired_visual:
+            break
         txt = clean_bullet(item["text"])
         if not txt:
             continue
-        if is_duplicate(txt, seen, thr=0.62):
+
+        # กัน exact duplicate แบบง่าย ๆ เฉพาะใน visual กันเอง
+        if txt in seen:
             continue
+
+        uniq.append({"text": txt, "source": "visual"})
         seen.append(txt)
-        uniq.append({"text": txt, "source": item["source"]})
+        used_visual_idx.add(idx)
+
+    # 8) เติมที่เหลือด้วย (visual ที่ยังไม่ใช้ + transcript) แบบเดิม
+    remaining: List[Dict[str, Any]] = []
+    for i, v in enumerate(visual_items):
+        if i not in used_visual_idx:
+            remaining.append(v)
+    remaining.extend(transcript_items)
+
+    ranked_rest = sorted(
+        enumerate(remaining),
+        key=lambda t: (-info_score(t[1]), t[0]),
+    )
+
+    for _, item in ranked_rest:
         if len(uniq) >= max_items:
             break
+
+        txt = clean_bullet(item["text"])
+        if not txt:
+            continue
+
+        # ตอนนี้ค่อยใช้ is_duplicate กันซ้ำระหว่างทุก source
+        if is_duplicate(txt, seen, thr=0.62):
+            continue
+
+        seen.append(txt)
+        uniq.append({"text": txt, "source": item["source"]})
+
+    # 9) ลบ "(จากภาพ)" ออกจากผลลัพธ์สุดท้าย (ตามที่คุณต้องการ)
     for it in uniq:
-        if it["source"] == "visual" and not it["text"].rstrip().endswith("(จากภาพ)"):
-            it["text"] = it["text"].rstrip() + " (จากภาพ)"
+        if it["source"] == "visual":
+            it["text"] = it["text"].replace("(จากภาพ)", "").strip()
+
     return uniq
+
+
 
 def render_bullets(items: List[Dict[str, Any]]) -> str:
     return "\n".join(f"• {clean_bullet(x['text'])}" for x in items)
@@ -1074,8 +1243,7 @@ FEWSHOT_REF = """
 [ตัวอย่างรูปแบบที่ต้องการ]
 อินโทรเกริ่นภาพรวมสั้น ๆ ไม่ขายของ ไม่สรุปแบบหัวข้อ แต่วางบริบทว่าประเด็นหลักคืออะไรและทำไมสำคัญ
 จากนั้นค่อยอธิบายเหตุผล/หลักฐานที่เชื่อมโยงกันเป็นย่อหน้าเดียวหรือสองย่อหน้า โดยตัดการซ้ำคำหรือ
-ซ้ำตัวเลข หากมีข้อมูลจากภาพก็แทรกไว้ในประโยคเป็น (จากภาพ) เพื่อชี้ว่าเป็นหลักฐานเชิงสายตา
-สุดท้ายปิดด้วยข้อคิด/ข้อควรระวังที่ปฏิบัติได้ โดยไม่แปลงเป็นรายการย่อย
+ซ้ำตัวเลข
 """.strip()
 
 def self_critique_and_rewrite(draft: str, target_min_words: int, target_max_words: int) -> str:
@@ -1108,21 +1276,18 @@ def summarize_article_th(transcript: str,
     for x in items:
         if x.get("source") == "visual":
             txt = clean_bullet(x["text"])
-            if txt and "(จากภาพ)" not in txt:
-                txt += " (จากภาพ)"
             vis_points.append(txt)
     vis_points = dedup_and_rerank(vis_points, max_items=4)
 
     # ---- prompt หลัก (เน้นไม่ให้แก้ชื่อ แต่ไม่ใช้ lock) ----
     prompt = f"""
-เขียน "บทความภาษาไทยแบบเล่าเรื่อง" ความยาวประมาณ {target_min_words}-{target_max_words} คำ 
+เขียนบทความภาษาไทยแบบเล่าเรื่องความยาวประมาณ {target_min_words}-{target_max_words} คำ 
 โดยอ้างอิง TRANSCRIPT ด้านล่างเป็นหลัก และผสาน "หลักฐานจากภาพ" เท่าที่จำเป็น
 **ข้อกำหนดการเขียน**
 - อินโทรเกริ่นภาพรวมสั้น ๆ เพื่อให้เข้าใจว่าประเด็นหลักคืออะไรและทำไมสำคัญ  
 - จากนั้นอธิบายเนื้อหาหลักแบบต่อเนื่อง 2–4 ย่อหน้า (ห้ามใช้หัวข้อย่อย/บูลเล็ต/เลขลิสต์)  
 - ห้ามพูดซ้ำใจความเดิมหรือตัวเลขเดิมเกิน 1 ครั้ง  
 - ใช้คำเชื่อมให้ลื่นไหล อ่านเข้าใจตั้งแต่ต้นจนจบ  
-- ถ้ามีข้อมูลจากภาพ ให้แทรกไว้ในประโยคเป็น (จากภาพ) เพื่อชี้ว่าเป็นหลักฐานเชิงสายตา  
 - ห้ามขึ้นต้นด้วยคำว่า "สวัสดี", "วันนี้", "บทความนี้", "เราจะมาดู"  
 - หลีกเลี่ยงการเปลี่ยนชื่อเฉพาะ/ตัวย่อ/ชื่อบุคคล/ตัวเลขใน TRANSCRIPT  
 - ปิดท้ายด้วยข้อคิดหรือข้อสังเกตเชิงเหตุผลสั้น ๆ ที่สอดคล้องกับเนื้อหา  
@@ -1216,7 +1381,7 @@ def main():
     send_progress("สร้างคำบรรยายภาพ", 80, 100)
 
     # 4) สรุปเฉพาะ "Transcript + Visual"
-    items = summarize_transcript_plus_visual_items(transcript, facts, max_items=8)
+    items = summarize_transcript_plus_visual_items(transcript, facts, max_items=4)
     send_progress("ทำสรุป", 85, 33)
 
     # 5) Save dropdown + bullets + article

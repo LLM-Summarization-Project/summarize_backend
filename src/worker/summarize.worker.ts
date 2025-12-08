@@ -12,10 +12,14 @@ const concurrency = Number(process.env.BULL_CONCURRENCY ?? 2); // ปรับ�
 const worker = new Worker(
   QUEUE,
   async (job: Job) => {
-    const { summaryId, youtubeUrl } = job.data as {
+    const { summaryId, youtubeUrl, userId } = job.data as {
       summaryId: string;
       youtubeUrl: string;
+      userId: number;
     };
+
+    let cancelledByUser = false;
+    let cancelTimer: NodeJS.Timeout | null = null;
 
     // mark RUNNING
     await prisma.summary.update({
@@ -23,7 +27,7 @@ const worker = new Worker(
       data: { status: 'RUNNING', startedAt: new Date(), percent: 0 },
     });
 
-    const user = 'user1'; // temporary user
+    const user = userId.toString();
     const outputsDir = path.resolve(process.cwd(), 'outputs', user);
     const runnerPath = path.resolve(process.cwd(), 'python', 'runner.py');
 
@@ -36,7 +40,7 @@ const worker = new Worker(
         '--out_dir',
         outputsDir,
         '--scene_thresh',
-        process.env.SCENE_THRESH ?? '0.6',
+        process.env.SCENE_THRESH ?? '0.4',
         '--language',
         process.env.LANGUAGE ?? 'th',
         '--asr_device',
@@ -132,6 +136,28 @@ const worker = new Worker(
       void handleTqdmChunk(text);
     });
 
+    cancelTimer = setInterval(async () => {
+      try {
+        const s = await prisma.summary.findUnique({
+          where: { id: summaryId },
+          select: { status: true },
+        });
+
+        if (!s) return;
+        if (s.status === 'CANCEL' && !cancelledByUser) {
+          console.log(`[${summaryId}] detected CANCELLED in DB, sending SIGTERM to python`);
+          cancelledByUser = true;
+          py.kill('SIGTERM'); // หรือ 'SIGKILL' ถ้าอยากแบบแรง
+          if (cancelTimer) {
+            clearInterval(cancelTimer);
+            cancelTimer = null;
+          }
+        }
+      } catch (e) {
+        console.error(`[${summaryId}] cancel check error`, e);
+      }
+    }, 1000);
+
     // FD3 = progress (JSON lines จาก pipeline)
     const progress = py.stdio[3] as NodeJS.ReadableStream;
     progress.setEncoding('utf8');
@@ -142,10 +168,7 @@ const worker = new Worker(
         try {
           const msg = JSON.parse(t);
           if (msg?.type === 'progress') {
-            const percent = Math.max(
-              0,
-              Math.min(99, Number(msg.percent) || 0),
-            );
+            const percent = Math.max(0, Math.min(99, Number(msg.percent) || 0));
             await job.updateProgress({
               percent,
               step: msg.step ?? '',
@@ -165,6 +188,11 @@ const worker = new Worker(
     // Promise จบเมื่อโปรเซสปิด
     await new Promise<void>((resolve, reject) => {
       py.on('error', async (err) => {
+        if (cancelTimer) {
+          clearInterval(cancelTimer);
+          cancelTimer = null;
+        }
+
         await prisma.summary.update({
           where: { id: summaryId },
           data: {
@@ -176,10 +204,16 @@ const worker = new Worker(
         reject(err);
       });
 
-      py.on('close', async (code) => {
+      py.on('close', async (code, signal) => {
+        if (cancelTimer) {
+          clearInterval(cancelTimer);
+          cancelTimer = null;
+        }
+
         // flush บรรทัดสุดท้าย
         if (outBuf.trim()) lastLine = outBuf.trim();
 
+        // helper เดิมของคุณ
         const finishError = async (msg: string) => {
           await prisma.summary.update({
             where: { id: summaryId },
@@ -191,6 +225,34 @@ const worker = new Worker(
           });
         };
 
+        // 🟥 เคสนี้: user กด cancel → เราฆ่า python ไปเอง
+        if (cancelledByUser || signal === 'SIGTERM' || signal === 'SIGKILL') {
+          console.log(
+            `[${summaryId}] python exited due to cancel (code=${code}, signal=${signal})`,
+          );
+
+          // อัปเดต DB ให้เป็น CANCELLED
+          await prisma.summary.update({
+            where: { id: summaryId },
+            data: {
+              status: 'CANCEL',
+              finishedAt: new Date(),
+              // จะเก็บ errorMessage ว่า "Cancelled by user" ก็ได้
+              errorMessage: 'Cancelled by user',
+            },
+          });
+
+          await job.updateProgress({
+            percent: 100,
+            step: 'ยกเลิกโดยผู้ใช้',
+            subprogress: 100,
+          });
+
+          // จะให้ BullMQ มองว่า "failed แบบพิเศษ" ก็ reject ด้วย error เฉพาะชื่อ
+          return resolve();
+        }
+
+        // จากตรงนี้ลงไปคือ logic เดิมของคุณ (code === 0 / else)
         if (code === 0) {
           if (!lastLine) {
             await finishError('Python exited 0 but no final JSON emitted.');
@@ -284,6 +346,10 @@ worker.on('completed', (job) => {
   console.log(`[OK] job ${job.id}`);
 });
 worker.on('failed', (job, err) => {
+  if (err?.message === 'CANCELLED_BY_USER') {
+    console.log(`[CANCELLED] job ${job?.id}`);
+    return;
+  }
   console.error(`[FAIL] job ${job?.id}:`, err?.message);
 });
 

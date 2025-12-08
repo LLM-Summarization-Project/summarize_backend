@@ -8,7 +8,7 @@ export class SummarizeRequestDto {
     youtubeUrl: string;
 }
 
-export type SummaryStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'ERROR';
+export type SummaryStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'ERROR' | 'CANCEL';
 
 export interface SummaryResult {
     transcript_path?: string;

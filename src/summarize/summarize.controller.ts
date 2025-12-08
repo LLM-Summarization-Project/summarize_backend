@@ -6,17 +6,20 @@ import {
   Patch,
   Param,
   Delete,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import { SummarizeService } from './summarize.service';
 import { SummarizeRequestDto } from './dto/create-summarize.dto';
-import { UpdateSummarizeDto } from './dto/update-summarize.dto';
 import { ApiCreatedResponse, ApiTags } from '@nestjs/swagger';
+import { LocalJwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
 @ApiTags('summary')
 @Controller('summary')
 export class SummarizeController {
   constructor(private readonly summarizeService: SummarizeService) {}
 
+  @UseGuards(LocalJwtAuthGuard)
   @Post()
   @ApiCreatedResponse({
     description: 'Summary job created successfully',
@@ -27,8 +30,8 @@ export class SummarizeController {
       },
     },
   })
-  createSummary(@Body() summarizeRequestDto: SummarizeRequestDto) {
-    return this.summarizeService.createSummary(summarizeRequestDto.youtubeUrl);
+  createSummary(@Body() summarizeRequestDto: SummarizeRequestDto, @Req() req) {
+    return this.summarizeService.createSummary(summarizeRequestDto.youtubeUrl, req.user.id);
   }
 
   @Get(':id')
@@ -88,6 +91,32 @@ export class SummarizeController {
   })
   getOntologyData(@Param('id') id: string) {
     return this.summarizeService.getOntologyData(id);
+  }
+
+  // get my summary
+  @UseGuards(LocalJwtAuthGuard)
+  @Get()
+  @ApiCreatedResponse({
+    description: 'Get my summary',
+    schema: {
+      example: []
+    },
+  })
+  getMySummary(@Req() req) {
+    return this.summarizeService.getMySummary(req.user.id);
+  }
+
+  @Post(':id/cancel')
+  @ApiCreatedResponse({
+    description: 'Cancel summary job by summaryId',
+    schema: {
+      example: {
+        status: 'CANCEL',
+      },
+    },
+  })
+  cancelSummary(@Param('id') id: string) {
+    return this.summarizeService.cancelSummary(id);
   }
 
   // @Get()
