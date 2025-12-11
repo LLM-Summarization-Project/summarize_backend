@@ -10,4 +10,4 @@ import { AuthModule } from 'src/auth/auth.module';
   controllers: [SummarizeController],
   providers: [SummarizeService],
 })
-export class SummarizeModule {}
+export class SummarizeModule { }
