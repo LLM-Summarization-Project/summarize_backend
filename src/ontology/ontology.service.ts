@@ -21,7 +21,7 @@ export class OntologyService {
     constructor(private configService: ConfigService) {
         this.ontologyBaseUrl =
             this.configService.get<string>('ONTOLOGY_SERVICE_URL') ??
-            'http://localhost:3000';
+            'http://localhost:3001';
     }
 
     /**
