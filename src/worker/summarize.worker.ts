@@ -3,9 +3,12 @@ import { Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { spawn } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs/promises';
+import axios from 'axios';
 
 const prisma = new PrismaClient();
 const QUEUE = 'summarize';
+const ontology = process.env.ONTOLOGY_SERVICE;
 
 const concurrency = Number(process.env.BULL_CONCURRENCY ?? 2); // ปรับได้ตามทรัพยากร
 
@@ -80,6 +83,7 @@ const worker = new Worker(
     let lastLine: string | null = null;
     let outBuf = '';
     let stderr = '';
+    let asrPercent = 0;
 
     // 💡 helper: ดัก % จาก tqdm (เช่น " 27%|██▋       | 1552/5757 [...]")
     const handleTqdmChunk = async (chunk: string) => {
@@ -95,7 +99,9 @@ const worker = new Worker(
         const p = Number(m[1]);
         if (Number.isNaN(p)) continue;
 
+        if (asrPercent === 100) return;
         const subprogress = Math.max(0, Math.min(100, p));
+        asrPercent = subprogress;
 
         const percent = 10 + Math.floor((subprogress * 35) / 100); // tqdm ช่วง ASR = 10-45%
 
@@ -305,6 +311,27 @@ const worker = new Worker(
               step: 'บันทึกข้อมูล',
               subprogress: 100,
             });
+
+            let summaryContent: string | null = null;
+            if (result.article_path) {
+              try {
+                const normalizedPath = result.article_path.replace(/\\/g, '/');
+                const filepath = path.resolve(normalizedPath);
+                summaryContent = await fs.readFile(filepath, 'utf-8');
+              } catch (error) {
+                console.error(`Failed to read summary file:`, error);
+              }
+            }
+
+            try {
+              await axios.post(`${ontology}/ontology/topic`, {
+              userId,
+              name: metrics.keyword,
+              description: summaryContent,
+            })
+            } catch (e) {
+              console.log('Failed to call Ontology Service:', e.message)
+            }
 
             resolve();
           } catch (e: any) {
