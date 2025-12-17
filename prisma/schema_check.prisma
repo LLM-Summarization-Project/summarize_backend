@@ -7,12 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int                 @id @default(autoincrement())
-  username  String              @unique
+model standard naming{
+  id        Int       @id @default(autoincrement())
+  username  String    @unique
   password  String
-  createdAt DateTime            @default(now())
-  summaries Summary[]
+  createdAt DateTime  @default(now())
+  Summary   Summary[]
   topics    UserOntologyTopic[]
 }
 
@@ -46,7 +46,7 @@ model Summary {
   errorMessage        String?
   keyword             String?
   userId              Int
-  user                User          @relation(fields: [userId], references: [id])
+  User                User          @relation(fields: [userId], references: [id])
 
   @@index([status, startedAt])
 }
@@ -65,8 +65,8 @@ model OntologyTopic {
   description String?
   createdAt   DateTime @default(now())
 
-  frequency Int    @default(0)
-  score     Float?
+  frequency   Int      @default(0)
+  score       Float?
 
   relatedTopics String[] @default([])
 
@@ -76,11 +76,11 @@ model OntologyTopic {
 }
 
 model UserOntologyTopic {
-  userId  Int
-  topicId String @db.Uuid
+  userId    Int
+  topicId   String   @db.Uuid
 
-  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  topic OntologyTopic @relation("TopicUsers", fields: [topicId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic     OntologyTopic @relation("TopicUsers", fields: [topicId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
@@ -93,10 +93,10 @@ model OntologyTopicRelation {
   fromTopicId String @db.Uuid
   toTopicId   String @db.Uuid
 
-  fromTopic OntologyTopic @relation("FromTopic", fields: [fromTopicId], references: [id], onDelete: Cascade)
-  toTopic   OntologyTopic @relation("ToTopic", fields: [toTopicId], references: [id], onDelete: Cascade)
+  fromTopic   OntologyTopic @relation("FromTopic", fields: [fromTopicId], references: [id], onDelete: Cascade)
+  toTopic     OntologyTopic @relation("ToTopic",   fields: [toTopicId],   references: [id], onDelete: Cascade)
 
-  weight Float?
+  weight      Float?
 
   @@id([fromTopicId, toTopicId])
 }
