@@ -91,7 +91,7 @@ export class SummarizeService {
   async getMySummary(userId: number) {
     const summaries = await this.prisma.summary.findMany({
       where: { userId, status: 'DONE' },
-      orderBy: { startedAt: 'asc' },
+      orderBy: { startedAt: 'desc' },
       select: {
         id: true,
         youtubeUrl: true,
@@ -120,6 +120,24 @@ export class SummarizeService {
       }),
     );
     return summariesWithContent;
+  }
+
+  async getAllSummary() {
+    const summaries = await this.prisma.summary.findMany({
+      orderBy: { startedAt: 'desc' },
+      select: {
+        id: true,
+        youtubeUrl: true,
+        percent: true,
+        durationSec: true,
+        startedAt: true,
+        status: true,
+      },
+    });
+
+    const activeWork = summaries.filter((summary) => summary.status === 'RUNNING');
+
+    return { summary: summaries, active_worker: activeWork.length};
   }
 
   async cancelSummary(summaryId: string) {

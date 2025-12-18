@@ -34,6 +34,11 @@ export class SummarizeController {
     return this.summarizeService.createSummary(summarizeRequestDto.youtubeUrl, req.user.id);
   }
 
+  @Get('all')
+  getAllSummary() {
+    return this.summarizeService.getAllSummary();
+  }
+
   @Get(':id')
   @ApiCreatedResponse({
     description: 'Get all data of summary by summaryId',
