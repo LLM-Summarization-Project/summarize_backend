@@ -107,7 +107,7 @@ SYSTEM_PROMPT_TH = (
 
 # ===== NEW: Generation presets (minimal-safe) =====
 GEN_OPTS_QUALITY = {
-    "temperature": 0.7,        # ใกล้ default ของ Ollama
+    "temperature": 0.3,        # ใกล้ default ของ Ollama
     "top_p": 0.9,
     "top_k": 40,
     "repeat_penalty": 1.15,    # ลดจาก 1.6 -> 1.15 เพื่อลดประหลาด/ซ้ำ
@@ -533,7 +533,12 @@ def transcribe_whisper(
         wav_path,
         language=language,
         fp16=(device == "cuda"),
-        temperature=0.0,
+        # temperature=0.0,
+        temperature=(0.0, 0.2, 0.4, 0.6), # Standard fallback
+        logprob_threshold=None,
+        condition_on_previous_text=False, # STOP hallucination propagation
+        compression_ratio_threshold=2.0, # Fix repetition
+        initial_prompt="ต่อไปนี้เป็นซับไตเติ้ลภาษาไทย", # Force Thai context
         verbose=False,  
     )
 
@@ -1315,15 +1320,15 @@ def extract_single_keyword_th(text: str) -> str:
     """
     prompt = f"""
 อ่านบทความต่อไปนี้ แล้วตอบเพียงคำเดียวที่เป็น "คำสำคัญหลัก" เท่านั้น
-- ห้ามพูดเกินหนึ่งคำ
+- ห้ามใช้คำประสมยาวๆ หรือวลี (ให้เลือกคำนามหลักคำเดียว)
 - ห้ามเติมคำอธิบาย
-- ตัวอย่าง: ถ้าบทความพูดถึงการเมือง ให้ตอบว่า การเมือง
-- ให้ตอบเฉพาะคำเดียวเช่นนั้น
+- ให้ตอบเฉพาะคำเดียว
+- ตอบเป็นภาษาไทย
 
 [บทความ]
 {text}
 """
-    out = ollama_summarize(prompt, options={"temperature": 0.2, "num_ctx": 1024})
+    out = ollama_summarize(prompt, options={"temperature": 0.0, "num_ctx": 1024})
     # ตัดบรรทัด/เว้นวรรคให้เหลือแค่คำเดียว
     keyword = out.strip().split()[0]
     keyword = re.sub(r"[^\wก-๙]", "", keyword)
