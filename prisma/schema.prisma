@@ -37,17 +37,53 @@ model Summary {
   errorMessage        String?
   keyword             String?
   userId              Int
-  user User @relation(fields: [userId], references: [id])
+  user                User          @relation(fields: [userId], references: [id])
 
   @@index([status, startedAt])
 }
 
 model User {
-  id        Int       @id @default(autoincrement())
-  username  String    @unique
-  password  String
-  createdAt DateTime  @default(now())
-  summaries Summary[]
+  id                Int                 @id @default(autoincrement())
+  username          String              @unique
+  password          String
+  createdAt         DateTime            @default(now())
+  summaries         Summary[]
+  UserOntologyTopic UserOntologyTopic[]
+}
+
+model OntologyTopic {
+  id                                                                     String                  @id @db.Uuid
+  name                                                                   String                  @unique
+  description                                                            String?
+  createdAt                                                              DateTime                @default(now())
+  frequency                                                              Int                     @default(0)
+  score                                                                  Float?
+  relatedTopics                                                          String[]                @default([])
+  OntologyTopicRelation_OntologyTopicRelation_fromTopicIdToOntologyTopic OntologyTopicRelation[] @relation("OntologyTopicRelation_fromTopicIdToOntologyTopic")
+  OntologyTopicRelation_OntologyTopicRelation_toTopicIdToOntologyTopic   OntologyTopicRelation[] @relation("OntologyTopicRelation_toTopicIdToOntologyTopic")
+  UserOntologyTopic                                                      UserOntologyTopic[]
+}
+
+model OntologyTopicRelation {
+  fromTopicId                                                    String        @db.Uuid
+  toTopicId                                                      String        @db.Uuid
+  weight                                                         Float?
+  OntologyTopic_OntologyTopicRelation_fromTopicIdToOntologyTopic OntologyTopic @relation("OntologyTopicRelation_fromTopicIdToOntologyTopic", fields: [fromTopicId], references: [id], onDelete: Cascade)
+  OntologyTopic_OntologyTopicRelation_toTopicIdToOntologyTopic   OntologyTopic @relation("OntologyTopicRelation_toTopicIdToOntologyTopic", fields: [toTopicId], references: [id], onDelete: Cascade)
+
+  @@id([fromTopicId, toTopicId])
+}
+
+model UserOntologyTopic {
+  userId        Int
+  topicId       String        @db.Uuid
+  createdAt     DateTime      @default(now())
+  OntologyTopic OntologyTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  User          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, topicId])
+  @@index([topicId])
+  @@index([userId])
 }
 
 enum SummaryStatus {
