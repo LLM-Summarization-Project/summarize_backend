@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model standard naming{
+  id        Int       @id @default(autoincrement())
+  username  String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  Summary   Summary[]
+  topics    UserOntologyTopic[]
+}
+
+model Summary {
+  id                  String        @id @default(uuid())
+  youtubeUrl          String
+  status              SummaryStatus @default(QUEUED)
+  percent             Int           @default(0)
+  startedAt           DateTime      @default(now())
+  finishedAt          DateTime?
+  transcriptPath      String?
+  bulletPath          String?
+  summaryPath         String?
+  sceneFactsPath      String?
+  whisperModel        String?
+  asrDevice           String?
+  vlDevice            String?
+  vlModel             String?
+  sceneThresh         Float?
+  enableOcr           Boolean?
+  frames              Int?
+  bulletCount         Int?
+  transcriptWord      Int?
+  summaryWord         Int?
+  timeDownloadSec     Float?
+  timeSpeechtoTextSec Float?
+  timeCaptionImageSec Float?
+  timeSummarizeSec    Float?
+  timeTotal           Float?
+  durationSec         Float?
+  errorMessage        String?
+  keyword             String?
+  userId              Int
+  User                User          @relation(fields: [userId], references: [id])
+
+  @@index([status, startedAt])
+}
+
+enum SummaryStatus {
+  QUEUED
+  RUNNING
+  DONE
+  ERROR
+  CANCEL
+}
+
+model OntologyTopic {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+
+  frequency   Int      @default(0)
+  score       Float?
+
+  relatedTopics String[] @default([])
+
+  users             UserOntologyTopic[]     @relation("TopicUsers")
+  outgoingRelations OntologyTopicRelation[] @relation("FromTopic")
+  incomingRelations OntologyTopicRelation[] @relation("ToTopic")
+}
+
+model UserOntologyTopic {
+  userId    Int
+  topicId   String   @db.Uuid
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic     OntologyTopic @relation("TopicUsers", fields: [topicId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([userId, topicId])
+  @@index([userId])
+  @@index([topicId])
+}
+
+model OntologyTopicRelation {
+  fromTopicId String @db.Uuid
+  toTopicId   String @db.Uuid
+
+  fromTopic   OntologyTopic @relation("FromTopic", fields: [fromTopicId], references: [id], onDelete: Cascade)
+  toTopic     OntologyTopic @relation("ToTopic",   fields: [toTopicId],   references: [id], onDelete: Cascade)
+
+  weight      Float?
+
+  @@id([fromTopicId, toTopicId])
+}
