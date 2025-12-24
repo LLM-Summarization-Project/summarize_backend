@@ -5,5 +5,6 @@ import { SystemConfigController } from './system-config.controller';
 @Module({
   controllers: [SystemConfigController],
   providers: [SystemConfigService],
+  exports: [SystemConfigService],
 })
 export class SystemConfigModule {}
