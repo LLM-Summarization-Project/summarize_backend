@@ -79,9 +79,13 @@ export async function processor(job: Job) {
     let outBuf = '';
     let stderr = '';
     let asrPercent = 0;
+    let modelLoaded = false; // track ว่าโหลดโมเดลเสร็จแล้วหรือยัง
 
     // 💡 helper: ดัก % จาก tqdm (เช่น " 27%|██▋       | 1552/5757 [...]")
     const handleTqdmChunk = async (chunk: string) => {
+        // ถ้ายังโหลดโมเดลไม่เสร็จ ไม่ต้องจับ tqdm (เพราะอาจเป็น progress ของการโหลดโมเดล)
+        if (!modelLoaded) return;
+        
         const lines = chunk.split(/\r?\n/);
         for (const raw of lines) {
         const line = raw.trim();
@@ -168,6 +172,14 @@ export async function processor(job: Job) {
         if (!t) continue;
         try {
             const msg = JSON.parse(t);
+            
+            // จับ signal พิเศษว่าโหลดโมเดลเสร็จแล้ว
+            if (msg?.type === 'model_loaded') {
+                modelLoaded = true;
+                console.log(`[${summaryId}] Whisper model loaded successfully`);
+                continue;
+            }
+            
             if (msg?.type === 'progress') {
             const percent = Math.max(0, Math.min(99, Number(msg.percent) || 0));
             await job.updateProgress({
