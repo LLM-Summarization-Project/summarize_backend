@@ -47,6 +47,7 @@ model User {
   username          String              @unique
   password          String
   createdAt         DateTime            @default(now())
+  role              UserRole            @default(USER)
   summaries         Summary[]
   UserOntologyTopic UserOntologyTopic[]
 }
@@ -92,4 +93,9 @@ enum SummaryStatus {
   DONE
   ERROR
   CANCEL
+}
+
+enum UserRole {
+  ADMIN
+  USER
 }
