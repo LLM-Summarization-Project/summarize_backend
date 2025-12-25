@@ -545,13 +545,11 @@ def transcribe_whisper(
         wav_path,
         language=language,
         fp16=(device == "cuda"),
-        # temperature=0.0,
-        temperature=(0.0, 0.2, 0.4, 0.6), # Standard fallback
-        logprob_threshold=None,
-        condition_on_previous_text=False, # STOP hallucination propagation
-        compression_ratio_threshold=2.0, # Fix repetition
-        initial_prompt="ต่อไปนี้เป็นซับไตเติ้ลภาษาไทย", # Force Thai context
-        verbose=False,  
+        temperature=0.0,              # 🔥 สำคัญ
+        condition_on_previous_text=True,
+        initial_prompt=None,
+        compression_ratio_threshold=None,
+        verbose=False,
     )
 
     text = (result["text"] or "").strip()
