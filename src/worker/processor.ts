@@ -1,24 +1,19 @@
-import 'dotenv/config';
-import { Worker, Job } from 'bullmq';
+import { Job } from "bullmq";
+import path from "path";
+import { spawn } from "child_process";
+import axios from "axios";
 import { PrismaClient } from '@prisma/client';
-import { spawn } from 'child_process';
-import * as path from 'path';
 import * as fs from 'fs/promises';
-import axios from 'axios';
 
 const prisma = new PrismaClient();
-const QUEUE = 'summarize';
 const ontology = process.env.ONTOLOGY_SERVICE;
 
-const concurrency = Number(process.env.BULL_CONCURRENCY ?? 2); // ปรับได้ตามทรัพยากร
+export async function processor(job: Job) {
 
-const worker = new Worker(
-  QUEUE,
-  async (job: Job) => {
     const { summaryId, youtubeUrl, userId } = job.data as {
-      summaryId: string;
-      youtubeUrl: string;
-      userId: number;
+        summaryId: string;
+        youtubeUrl: string;
+        userId: number;
     };
 
     let cancelledByUser = false;
@@ -26,8 +21,8 @@ const worker = new Worker(
 
     // mark RUNNING
     await prisma.summary.update({
-      where: { id: summaryId },
-      data: { status: 'RUNNING', startedAt: new Date(), percent: 0 },
+        where: { id: summaryId },
+        data: { status: 'RUNNING', startedAt: new Date(), percent: 0 },
     });
 
     const user = userId.toString();
@@ -35,8 +30,8 @@ const worker = new Worker(
     const runnerPath = path.resolve(process.cwd(), 'python', 'runner.py');
 
     const py = spawn(
-      process.env.PYTHON_BIN ?? 'python',
-      [
+        process.env.PYTHON_BIN ?? 'python',
+        [
         runnerPath,
         '--youtube_url',
         youtubeUrl,
@@ -53,28 +48,28 @@ const worker = new Worker(
         '--whisper_model',
         process.env.WHISPER_MODEL ?? 'large-v3-turbo',
         ...(process.env.OLLAMA_API
-          ? ['--ollama_api', process.env.OLLAMA_API]
-          : []),
+            ? ['--ollama_api', process.env.OLLAMA_API]
+            : []),
         ...(process.env.OLLAMA_MODEL
-          ? ['--ollama_model', process.env.OLLAMA_MODEL]
-          : []),
+            ? ['--ollama_model', process.env.OLLAMA_MODEL]
+            : []),
         '--summary_id',
         summaryId,
-      ],
-      {
+        ],
+        {
         env: {
-          ...process.env,
-          PYTHONUNBUFFERED: '1',
-          PYTHONIOENCODING: 'utf-8',
-          PYTHONUTF8: '1',
+            ...process.env,
+            PYTHONUNBUFFERED: '1',
+            PYTHONIOENCODING: 'utf-8',
+            PYTHONUTF8: '1',
         },
         cwd: process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe', 'pipe'], // fd3 = progress
-      },
+        },
     );
 
     if (!py.stdout || !py.stderr || !py.stdio[3]) {
-      throw new Error('Python process missing stdio pipes');
+        throw new Error('Python process missing stdio pipes');
     }
 
     py.stdout.setEncoding('utf-8');
@@ -84,11 +79,15 @@ const worker = new Worker(
     let outBuf = '';
     let stderr = '';
     let asrPercent = 0;
+    let modelLoaded = false; // track ว่าโหลดโมเดลเสร็จแล้วหรือยัง
 
     // 💡 helper: ดัก % จาก tqdm (เช่น " 27%|██▋       | 1552/5757 [...]")
     const handleTqdmChunk = async (chunk: string) => {
-      const lines = chunk.split(/\r?\n/);
-      for (const raw of lines) {
+        // ถ้ายังโหลดโมเดลไม่เสร็จ ไม่ต้องจับ tqdm (เพราะอาจเป็น progress ของการโหลดโมเดล)
+        if (!modelLoaded) return;
+        
+        const lines = chunk.split(/\r?\n/);
+        for (const raw of lines) {
         const line = raw.trim();
         if (!line) continue;
 
@@ -106,114 +105,122 @@ const worker = new Worker(
         const percent = 10 + Math.floor((subprogress * 35) / 100); // tqdm ช่วง ASR = 10-45%
 
         await job.updateProgress({
-          percent,
-          step: 'ถอดเสียง',
-          subprogress: subprogress,
+            percent,
+            step: 'ถอดเสียง',
+            subprogress: subprogress,
         });
 
         await prisma.summary.update({
-          where: { id: summaryId },
-          data: { status: 'RUNNING', percent },
+            where: { id: summaryId },
+            data: { status: 'RUNNING', percent },
         });
-      }
+        }
     };
 
     // STDOUT: เก็บบรรทัดสุดท้าย (เป็น JSON สรุป) + ดัก tqdm เผื่อมันพ่น stdout
     py.stdout.on('data', (chunk: string) => {
-      outBuf += chunk;
-      const lines = outBuf.split(/\r?\n/);
-      outBuf = lines.pop() ?? '';
-      for (const line of lines) {
+        outBuf += chunk;
+        const lines = outBuf.split(/\r?\n/);
+        outBuf = lines.pop() ?? '';
+        for (const line of lines) {
         const t = line.trim();
         if (t) lastLine = t;
-      }
+        }
 
-      // ดัก % จาก tqdm ที่อาจโผล่ใน stdout
-      void handleTqdmChunk(chunk);
+        // ดัก % จาก tqdm ที่อาจโผล่ใน stdout
+        void handleTqdmChunk(chunk);
     });
 
     // STDERR: เก็บ error log + ดัก tqdm (ส่วนใหญ่ tqdm อยู่ตรงนี้)
     py.stderr.on('data', (d: string) => {
-      const text = d.toString();
-      console.error(`[${summaryId}]`, text);
-      stderr += text;
+        const text = d.toString();
+        console.error(`[${summaryId}]`, text);
+        stderr += text;
 
-      // ดัก % จาก tqdm ที่พ่นบน stderr
-      void handleTqdmChunk(text);
+        // ดัก % จาก tqdm ที่พ่นบน stderr
+        void handleTqdmChunk(text);
     });
 
     cancelTimer = setInterval(async () => {
-      try {
+        try {
         const s = await prisma.summary.findUnique({
-          where: { id: summaryId },
-          select: { status: true },
+            where: { id: summaryId },
+            select: { status: true },
         });
 
         if (!s) return;
         if (s.status === 'CANCEL' && !cancelledByUser) {
-          console.log(`[${summaryId}] detected CANCELLED in DB, sending SIGTERM to python`);
-          cancelledByUser = true;
-          py.kill('SIGTERM'); // หรือ 'SIGKILL' ถ้าอยากแบบแรง
-          if (cancelTimer) {
+            console.log(`[${summaryId}] detected CANCELLED in DB, sending SIGTERM to python`);
+            cancelledByUser = true;
+            py.kill('SIGTERM'); // หรือ 'SIGKILL' ถ้าอยากแบบแรง
+            if (cancelTimer) {
             clearInterval(cancelTimer);
             cancelTimer = null;
-          }
+            }
         }
-      } catch (e) {
+        } catch (e) {
         console.error(`[${summaryId}] cancel check error`, e);
-      }
+        }
     }, 1000);
 
     // FD3 = progress (JSON lines จาก pipeline)
     const progress = py.stdio[3] as NodeJS.ReadableStream;
     progress.setEncoding('utf8');
     progress.on('data', async (chunk: string) => {
-      for (const line of chunk.split(/\r?\n/)) {
+        for (const line of chunk.split(/\r?\n/)) {
         const t = line.trim();
         if (!t) continue;
         try {
-          const msg = JSON.parse(t);
-          if (msg?.type === 'progress') {
+            const msg = JSON.parse(t);
+            
+            // จับ signal พิเศษว่าโหลดโมเดลเสร็จแล้ว
+            if (msg?.type === 'model_loaded') {
+                modelLoaded = true;
+                console.log(`[${summaryId}] Whisper model loaded successfully`);
+                continue;
+            }
+            
+            if (msg?.type === 'progress') {
             const percent = Math.max(0, Math.min(99, Number(msg.percent) || 0));
             await job.updateProgress({
-              percent,
-              step: msg.step ?? '',
-              subprogress: msg.subprogress ?? '',
+                percent,
+                step: msg.step ?? '',
+                subprogress: msg.subprogress ?? '',
             });
             await prisma.summary.update({
-              where: { id: summaryId },
-              data: { status: 'RUNNING', percent },
+                where: { id: summaryId },
+                data: { status: 'RUNNING', percent },
             });
-          }
+            }
         } catch {
-          // ignore non-JSON
+            // ignore non-JSON
         }
-      }
+        }
     });
 
     // Promise จบเมื่อโปรเซสปิด
     await new Promise<void>((resolve, reject) => {
-      py.on('error', async (err) => {
+        py.on('error', async (err) => {
         if (cancelTimer) {
-          clearInterval(cancelTimer);
-          cancelTimer = null;
+            clearInterval(cancelTimer);
+            cancelTimer = null;
         }
 
         await prisma.summary.update({
-          where: { id: summaryId },
-          data: {
+            where: { id: summaryId },
+            data: {
             status: 'ERROR',
             errorMessage: `spawn error: ${err?.message ?? String(err)}`,
             finishedAt: new Date(),
-          },
+            },
         });
         reject(err);
-      });
+        });
 
-      py.on('close', async (code, signal) => {
+        py.on('close', async (code, signal) => {
         if (cancelTimer) {
-          clearInterval(cancelTimer);
-          cancelTimer = null;
+            clearInterval(cancelTimer);
+            cancelTimer = null;
         }
 
         // flush บรรทัดสุดท้าย
@@ -221,62 +228,62 @@ const worker = new Worker(
 
         // helper เดิมของคุณ
         const finishError = async (msg: string) => {
-          await prisma.summary.update({
+            await prisma.summary.update({
             where: { id: summaryId },
             data: {
-              status: 'ERROR',
-              errorMessage: msg,
-              finishedAt: new Date(),
+                status: 'ERROR',
+                errorMessage: msg,
+                finishedAt: new Date(),
             },
-          });
+            });
         };
 
         // 🟥 เคสนี้: user กด cancel → เราฆ่า python ไปเอง
         if (cancelledByUser || signal === 'SIGTERM' || signal === 'SIGKILL') {
-          console.log(
+            console.log(
             `[${summaryId}] python exited due to cancel (code=${code}, signal=${signal})`,
-          );
+            );
 
-          // อัปเดต DB ให้เป็น CANCELLED
-          await prisma.summary.update({
+            // อัปเดต DB ให้เป็น CANCELLED
+            await prisma.summary.update({
             where: { id: summaryId },
             data: {
-              status: 'CANCEL',
-              finishedAt: new Date(),
-              // จะเก็บ errorMessage ว่า "Cancelled by user" ก็ได้
-              errorMessage: 'Cancelled by user',
+                status: 'CANCEL',
+                finishedAt: new Date(),
+                // จะเก็บ errorMessage ว่า "Cancelled by user" ก็ได้
+                errorMessage: 'Cancelled by user',
             },
-          });
+            });
 
-          await job.updateProgress({
+            await job.updateProgress({
             percent: 100,
             step: 'ยกเลิกโดยผู้ใช้',
             subprogress: 100,
-          });
+            });
 
-          // จะให้ BullMQ มองว่า "failed แบบพิเศษ" ก็ reject ด้วย error เฉพาะชื่อ
-          return resolve();
+            // จะให้ BullMQ มองว่า "failed แบบพิเศษ" ก็ reject ด้วย error เฉพาะชื่อ
+            return resolve();
         }
 
         // จากตรงนี้ลงไปคือ logic เดิมของคุณ (code === 0 / else)
         if (code === 0) {
-          if (!lastLine) {
+            if (!lastLine) {
             await finishError('Python exited 0 but no final JSON emitted.');
             return reject(new Error('no-final-json'));
-          }
-          try {
+            }
+            try {
             const result = JSON.parse(lastLine);
             const metrics = result.metrics;
             if (result?.status && result.status !== 'ok') {
-              await finishError(
+                await finishError(
                 result?.errorMessage ?? 'Python returned error status.',
-              );
-              return reject(new Error('python-error-status'));
+                );
+                return reject(new Error('python-error-status'));
             }
 
             await prisma.summary.update({
-              where: { id: summaryId },
-              data: {
+                where: { id: summaryId },
+                data: {
                 status: 'DONE',
                 percent: 100,
                 finishedAt: new Date(),
@@ -304,86 +311,58 @@ const worker = new Worker(
                 timeSummarizeSec: metrics.t_summarize,
                 timeTotal: metrics.t_total,
                 durationSec: metrics.duration_sec,
-              },
+                },
             });
             await job.updateProgress({
-              percent: 100,
-              step: 'บันทึกข้อมูล',
-              subprogress: 100,
+                percent: 100,
+                step: 'บันทึกข้อมูล',
+                subprogress: 100,
             });
 
             let summaryContent: string | null = null;
             if (result.article_path) {
-              try {
+                try {
                 const normalizedPath = result.article_path.replace(/\\/g, '/');
                 const filepath = path.resolve(normalizedPath);
                 summaryContent = await fs.readFile(filepath, 'utf-8');
-              } catch (error) {
+                } catch (error) {
                 console.error(`Failed to read summary file:`, error);
-              }
+                }
             }
 
             try {
-              await axios.post(`${ontology}/ontology/topic`, {
-              userId,
-              name: metrics.keyword,
-              description: summaryContent,
+                await axios.post(`${ontology}/ontology/topic`, {
+                userId,
+                name: metrics.keyword,
+                description: summaryContent,
             })
             } catch (e) {
-              console.log('Failed to call Ontology Service:', e.message)
+                console.log('Failed to call Ontology Service:', e.message)
             }
 
             resolve();
-          } catch (e: any) {
+            } catch (e: any) {
             await finishError(`Failed to parse final JSON: ${e?.message}`);
             reject(e);
-          }
+            }
         } else {
-          if (lastLine) {
+            if (lastLine) {
             try {
-              const r = JSON.parse(lastLine);
-              if (r?.status === 'error') {
+                const r = JSON.parse(lastLine);
+                if (r?.status === 'error') {
                 await finishError(r?.errorMessage ?? `exit ${code}`);
                 return reject(new Error(r?.errorMessage ?? `exit ${code}`));
-              }
+                }
             } catch {
-              /* ignore */
+                /* ignore */
             }
-          }
-          await finishError(stderr || `exit ${code}`);
-          reject(new Error(stderr || `exit ${code}`));
+            }
+            await finishError(stderr || `exit ${code}`);
+            reject(new Error(stderr || `exit ${code}`));
         }
-      });
+        });
     });
 
     // สำเร็จ
     return true;
-  },
-  {
-    concurrency, // <<<< รันพร้อมกันได้เท่านี้
-    connection: {
-      host: process.env.REDIS_HOST ?? 'localhost',
-      port: Number(process.env.REDIS_PORT ?? 6379),
-    },
-  },
-);
-
-// optional: log event
-worker.on('completed', (job) => {
-  console.log(`[OK] job ${job.id}`);
-});
-worker.on('failed', (job, err) => {
-  if (err?.message === 'CANCELLED_BY_USER') {
-    console.log(`[CANCELLED] job ${job?.id}`);
-    return;
-  }
-  console.error(`[FAIL] job ${job?.id}:`, err?.message);
-});
-
-// graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down worker...');
-  await worker.close();
-  await prisma.$disconnect();
-  process.exit(0);
-});
+}

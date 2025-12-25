@@ -1,15 +1,14 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
+import { SystemConfigService } from 'src/system-config/system-config.service';
 
 export const SUMMARIZE_QUEUE = 'summarize';
 
 @Injectable()
 export class QueueService {
   public readonly queue: Queue;
-  private readonly concurrency: number;
 
-  constructor() {
-    this.concurrency = Number(process.env.BULL_CONCURRENCY ?? 2);
+  constructor(private readonly systemConfigService: SystemConfigService) {
 
     this.queue = new Queue(SUMMARIZE_QUEUE, {
       connection: {
@@ -51,11 +50,12 @@ export class QueueService {
     const active = queues.active || 0;
     const waiting = queues.waiting || 0;
 
-    const freeSlots = Math.max(this.concurrency - active, 0);
+    const concurrency = this.systemConfigService.getConcurrency().concurrency;
+    const freeSlots = Math.max(concurrency - active, 0);
 
     return {
       ...queues,
-      concurrency: this.concurrency,
+      concurrency,
       active,
       waiting,
       freeSlots,

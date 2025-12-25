@@ -527,7 +527,19 @@ def transcribe_whisper(
     subprocess = 1 (ถอดเสียง)
     """
 
+    # ส่ง progress เพื่อบอกว่ากำลังโหลดโมเดล (ไม่ใช่ถอดเสียง)
+    log("🔄 Loading Whisper model...")
+    
     model = whisper.load_model(model_name, device=device)
+    
+    # ส่ง signal พิเศษบอก processor.ts ว่าโหลดโมเดลเสร็จแล้ว
+    if _progress_fp:
+        _progress_fp.write(json.dumps({"type":"model_loaded"}) + "\n")
+        _progress_fp.flush()
+    
+    # โหลดโมเดลเสร็จแล้ว เริ่มถอดเสียงจริง
+    send_progress("ถอดเสียง", step_start, 0)
+    log("✅ Model loaded, starting transcription...")
 
     result = model.transcribe(
         wav_path,

@@ -132,6 +132,7 @@ export class SummarizeService {
         durationSec: true,
         startedAt: true,
         status: true,
+        keyword: true,
       },
     });
 
