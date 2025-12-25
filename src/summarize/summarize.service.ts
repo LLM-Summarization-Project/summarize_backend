@@ -6,6 +6,7 @@ import path from 'path';
 import * as fs from 'fs/promises';
 import Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
+import { VideoCacheService } from 'src/cache/video-cache.service';
 
 @Injectable()
 export class SummarizeService {
@@ -14,6 +15,7 @@ export class SummarizeService {
     private prisma: PrismaService,
     private queueService: QueueService,
     private configService: ConfigService,
+    private videoCacheService: VideoCacheService,
   ) {
     this.redis = new Redis({
       host: this.configService.get<string>('REDIS_HOST') ?? 'localhost',
@@ -22,6 +24,29 @@ export class SummarizeService {
   }
 
   async createSummary(youtubeUrl: string, userId: number) {
+    // Cache-first: Check if video already processed (space-based lookup)
+    const cached = await this.videoCacheService.getCachedSummary(youtubeUrl);
+    if (cached) {
+      console.log(`Cache HIT for ${youtubeUrl}, returning existing summary`);
+      return { jobId: cached.id, status: 'CACHED' as const, fromCache: true };
+    }
+
+    // Check DB for existing completed summary
+    const existing = await this.prisma.summary.findFirst({
+      where: { youtubeUrl, status: 'DONE' },
+    });
+    if (existing) {
+      // Warm the cache for next time
+      await this.videoCacheService.setCachedSummary(youtubeUrl, {
+        id: existing.id,
+        youtubeUrl: existing.youtubeUrl,
+        status: 'DONE',
+      });
+      console.log(`DB HIT for ${youtubeUrl}, cached and returning`);
+      return { jobId: existing.id, status: 'CACHED' as const, fromCache: true };
+    }
+
+    // Cache miss - create new job
     const id = randomUUID();
 
     await this.prisma.summary.create({
@@ -138,7 +163,7 @@ export class SummarizeService {
 
     const activeWork = summaries.filter((summary) => summary.status === 'RUNNING');
 
-    return { summary: summaries, active_worker: activeWork.length};
+    return { summary: summaries, active_worker: activeWork.length };
   }
 
   async cancelSummary(summaryId: string) {
