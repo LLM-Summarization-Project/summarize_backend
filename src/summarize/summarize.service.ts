@@ -24,26 +24,35 @@ export class SummarizeService {
   }
 
   async createSummary(youtubeUrl: string, userId: number) {
+    // Check if cache is disabled via env
+    const disableCache = this.configService.get<string>('DISABLE_CACHE') === 'true';
+    
     // Cache-first: Check if video already processed (space-based lookup)
-    const cached = await this.videoCacheService.getCachedSummary(youtubeUrl);
-    if (cached) {
-      console.log(`Cache HIT for ${youtubeUrl}, returning existing summary`);
-      return { jobId: cached.id, status: 'CACHED' as const, fromCache: true };
+    if (!disableCache) {
+      const cached = await this.videoCacheService.getCachedSummary(youtubeUrl);
+      if (cached) {
+        console.log(`Cache HIT for ${youtubeUrl}, returning existing summary`);
+        return { jobId: cached.id, status: 'CACHED' as const, fromCache: true };
+      }
+    } else {
+      console.log(`Cache DISABLED, skipping cache lookup`);
     }
 
-    // Check DB for existing completed summary
-    const existing = await this.prisma.summary.findFirst({
-      where: { youtubeUrl, status: 'DONE' },
-    });
-    if (existing) {
-      // Warm the cache for next time
-      await this.videoCacheService.setCachedSummary(youtubeUrl, {
-        id: existing.id,
-        youtubeUrl: existing.youtubeUrl,
-        status: 'DONE',
+    // Check DB for existing completed summary (skip if cache disabled)
+    if (!disableCache) {
+      const existing = await this.prisma.summary.findFirst({
+        where: { youtubeUrl, status: 'DONE' },
       });
-      console.log(`DB HIT for ${youtubeUrl}, cached and returning`);
-      return { jobId: existing.id, status: 'CACHED' as const, fromCache: true };
+      if (existing) {
+        // Warm the cache for next time
+        await this.videoCacheService.setCachedSummary(youtubeUrl, {
+          id: existing.id,
+          youtubeUrl: existing.youtubeUrl,
+          status: 'DONE',
+        });
+        console.log(`DB HIT for ${youtubeUrl}, cached and returning`);
+        return { jobId: existing.id, status: 'CACHED' as const, fromCache: true };
+      }
     }
 
     // Cache miss - create new job
@@ -54,10 +63,31 @@ export class SummarizeService {
     });
     console.log(`Created summary record with ID: ${id}`);
 
-    // ส่งงานเข้า BullMQ
-    await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId });
+    // ส่งงานเข้า BullMQ พร้อม whisperTemp ณ เวลา submit
+    // cache .env
+    // const whisperTemp = parseFloat(this.configService.get<string>('WHISPER_TEMP') ?? '0.0');
+    // อ่านจากไฟล์ .env โดยตรง (ไม่ cache) เพื่อให้ batch script เปลี่ยนค่าได้ ต้องมา comment, uncomment ด้านบนเพื่อให้ cache ทำงาน
+    const whisperTemp = await this.readWhisperTempFromEnvFile();
+    console.log(`Using WHISPER_TEMP: ${whisperTemp}`);
+    await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId, whisperTemp });
 
     return { jobId: id, status: 'QUEUED' as const };
+  }
+
+  // อ่าน WHISPER_TEMP จากไฟล์ .env โดยตรง (runtime, ไม่ cache)
+  private async readWhisperTempFromEnvFile(): Promise<number> {
+    try {
+      const envPath = path.resolve(process.cwd(), '.env');
+      const content = await fs.readFile(envPath, 'utf-8');
+      const match = content.match(/^WHISPER_TEMP=(.+)$/m);
+      if (match) {
+        const val = parseFloat(match[1].trim());
+        if (!isNaN(val)) return val;
+      }
+    } catch (e) {
+      // fallback to process.env if file read fails
+    }
+    return parseFloat(process.env.WHISPER_TEMP ?? '0.0');
   }
 
   async getSummary(id: string) {

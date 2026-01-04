@@ -340,6 +340,7 @@ export async function processor(job: Job) {
                             sceneFactsPath: result.scene_facts_path,
 
                             whisperModel: metrics.whisper_model,
+                            whisperTemp: metrics.whisper_temp,
                             asrDevice: metrics.asr_device,
                             vlDevice: metrics.vl_device,
                             vlModel: metrics.vl_model,

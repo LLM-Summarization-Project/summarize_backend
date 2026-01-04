@@ -17,6 +17,7 @@ def main():
     p.add_argument("--scene_thresh", type=float, default=0.6)
     p.add_argument("--enable_ocr", action="store_true")
     p.add_argument("--whisper_model", default="large-v3-turbo")
+    p.add_argument("--whisper_temp", type=float, default=0.0)
     p.add_argument("--language", default="th")
     p.add_argument("--asr_device", default="cpu")
     p.add_argument("--vl_device", default="cpu")
@@ -37,6 +38,7 @@ def main():
     pipeline.LANGUAGE      = args.language
     pipeline.ASR_DEVICE    = args.asr_device
     pipeline.VL_DEVICE     = args.vl_device
+    pipeline.WHISPER_TEMP  = args.whisper_temp
 
     if args.ollama_api:
         os.environ["OLLAMA_API"] = args.ollama_api
@@ -54,6 +56,7 @@ def main():
     pipeline.DROPDOWN_JSON     = os.path.join(summary_dir, "dropdown_items.json")
     pipeline.FINAL_TXT         = os.path.join(summary_dir, "dropdown_list.txt")
     pipeline.FINAL_ARTICLE_TXT = os.path.join(summary_dir, "summary.txt")
+    pipeline.TRANSCRIPT_SEGMENTS = os.path.join(summary_dir, "transcript_segments.json")
     pipeline.METRICS_JSON      = os.path.join(summary_dir, "metrics.json")
 
     # รัน pipeline
