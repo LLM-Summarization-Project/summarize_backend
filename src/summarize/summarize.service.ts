@@ -63,10 +63,30 @@ export class SummarizeService {
     });
     console.log(`Created summary record with ID: ${id}`);
 
-    // ส่งงานเข้า BullMQ
-    await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId });
+    // ส่งงานเข้า BullMQ พร้อม whisperTemp ณ เวลา submit
+    // const whisperTemp = parseFloat(this.configService.get<string>('WHISPER_TEMP') ?? '0.0');
+    // อ่านจากไฟล์ .env โดยตรง (ไม่ cache) เพื่อให้ batch script เปลี่ยนค่าได้
+    const whisperTemp = await this.readWhisperTempFromEnvFile();
+    console.log(`Using WHISPER_TEMP: ${whisperTemp}`);
+    await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId, whisperTemp });
 
     return { jobId: id, status: 'QUEUED' as const };
+  }
+
+  // อ่าน WHISPER_TEMP จากไฟล์ .env โดยตรง (runtime, ไม่ cache)
+  private async readWhisperTempFromEnvFile(): Promise<number> {
+    try {
+      const envPath = path.resolve(process.cwd(), '.env');
+      const content = await fs.readFile(envPath, 'utf-8');
+      const match = content.match(/^WHISPER_TEMP=(.+)$/m);
+      if (match) {
+        const val = parseFloat(match[1].trim());
+        if (!isNaN(val)) return val;
+      }
+    } catch (e) {
+      // fallback to process.env if file read fails
+    }
+    return parseFloat(process.env.WHISPER_TEMP ?? '0.0');
   }
 
   async getSummary(id: string) {

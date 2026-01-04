@@ -37,6 +37,7 @@ model Summary {
   errorMessage        String?
   keyword             String?
   userId              Int
+  whisperTemp         Float?
   user                User          @relation(fields: [userId], references: [id])
 
   @@index([status, startedAt])

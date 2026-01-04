@@ -24,7 +24,7 @@ export class QueueService {
     });
   }
 
-  addRunJob(data: { summaryId: string; youtubeUrl: string, userId: number }) {
+  addRunJob(data: { summaryId: string; youtubeUrl: string; userId: number; whisperTemp: number }) {
     return this.queue.add(
       'run',
       data,

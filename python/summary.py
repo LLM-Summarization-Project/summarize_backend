@@ -83,6 +83,7 @@ log = functools.partial(print, file=sys.stderr, flush=True)
 
 LANGUAGE = "th"
 WHISPER_MODEL = "large-v3-turbo"
+WHISPER_TEMP = float(os.environ.get("WHISPER_TEMP", "0.0"))  # Whisper temperature (0.0 = deterministic)
 ASR_DEVICE = "cpu"      
 VL_DEVICE  = "cuda"     # ใช้กับ Florence เท่านั้น
 
@@ -544,7 +545,7 @@ def transcribe_whisper(
         wav_path,
         language=language,
         fp16=(device == "cuda"),
-        temperature=0.0,
+        temperature=WHISPER_TEMP,
         condition_on_previous_text=True,
         initial_prompt=None,
         compression_ratio_threshold=None,
@@ -1675,6 +1676,7 @@ def main():
             # ---- CONFIG / PARAMS ----
             "youtube_url": YOUTUBE_URL,
             "whisper_model": WHISPER_MODEL,
+            "whisper_temp": WHISPER_TEMP,
             "asr_device": ASR_DEVICE,
             "vl_device": VL_DEVICE,
             "vl_model": VL_MODEL_NAME,
