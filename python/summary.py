@@ -77,6 +77,7 @@ SCENES_JSON = "scenes.json"
 CAPTIONS_JSON = "captions.json"
 SCENE_FACTS_JSON = "scene_facts.json"
 TRANSCRIPT_TXT = "transcription.txt"
+TRANSCRIPT_SEGMENTS = "transcript_segments.json"
 METRICS_JSON = globals().get("METRICS_JSON", None)
 log = functools.partial(print, file=sys.stderr, flush=True)
 
@@ -86,7 +87,7 @@ ASR_DEVICE = "cpu"
 VL_DEVICE  = "cuda"     # ใช้กับ Florence เท่านั้น
 
 VL_MODEL_NAME = "microsoft/Florence-2-base"
-SCENE_THRESH = 0.4
+SCENE_THRESH = 0.6
 ENABLE_OCR = False
 
 # ใช้ 127.0.0.1 กันปัญหา IPv6/localhost บางเครื่อง
@@ -520,24 +521,22 @@ def transcribe_whisper(
     device: str,
     step_start: int = 10,
     step_end: int = 45,
-) -> str:
+) -> tuple[str, List[Dict[str, Any]]]:
     """
-    ถอดเสียงด้วย whisper ทั้งก้อน (ไม่ chunk) แต่ใช้ tqdm ภายใน whisper
-    เพื่อส่ง progress จริง ๆ ออกมาผ่าน send_progress()
-    subprocess = 1 (ถอดเสียง)
+    ถอดเสียงด้วย whisper และ return segments พร้อม timestamps
+    Returns:
+        tuple: (full_text, segments)
+        - full_text: ข้อความทั้งหมด
+        - segments: list of {start, end, text} สำหรับจับคู่กับ visual
     """
 
-    # ส่ง progress เพื่อบอกว่ากำลังโหลดโมเดล (ไม่ใช่ถอดเสียง)
     log("🔄 Loading Whisper model...")
-    
     model = whisper.load_model(model_name, device=device)
     
-    # ส่ง signal พิเศษบอก processor.ts ว่าโหลดโมเดลเสร็จแล้ว
     if _progress_fp:
         _progress_fp.write(json.dumps({"type":"model_loaded"}) + "\n")
         _progress_fp.flush()
     
-    # โหลดโมเดลเสร็จแล้ว เริ่มถอดเสียงจริง
     send_progress("ถอดเสียง", step_start, 0)
     log("✅ Model loaded, starting transcription...")
 
@@ -545,12 +544,21 @@ def transcribe_whisper(
         wav_path,
         language=language,
         fp16=(device == "cuda"),
-        temperature=0.0,              # 🔥 สำคัญ
+        temperature=0.0,
         condition_on_previous_text=True,
         initial_prompt=None,
         compression_ratio_threshold=None,
         verbose=False,
     )
+
+    # ดึง segments พร้อม timestamps
+    segments = []
+    for seg in result.get("segments", []):
+        segments.append({
+            "start": seg["start"],
+            "end": seg["end"],
+            "text": (seg.get("text") or "").strip()
+        })
 
     text = (result["text"] or "").strip()
     text = ensure_thai(text)
@@ -558,11 +566,15 @@ def transcribe_whisper(
     with open(TRANSCRIPT_TXT, "w", encoding="utf-8") as f:
         f.write(text)
 
-    # เผื่อให้จบ step นี้แน่ ๆ = step_end
+    # บันทึก segments แยกด้วย
+    with open(TRANSCRIPT_SEGMENTS, "w", encoding="utf-8") as f:
+        json.dump(segments, f, ensure_ascii=False, indent=2)
+    log(f"✅ Saved {len(segments)} transcript segments")
+
     send_progress("ถอดเสียง", step_end, 100)
     log("✅ Transcription done.")
 
-    return text
+    return text, segments
 
 def iapp_asr_api(wav_path: str, wav_name: str) -> str:
     url = "https://api.iapp.co.th/asr/v3"
@@ -805,6 +817,13 @@ def stream_scene_frames_and_caption(url: str,
 
 # ====== STEP 4: Merge into scene-level facts ======
 @dataclass
+class TranscriptSegment:
+    """Segment จาก Whisper พร้อม timestamp"""
+    start: float
+    end: float
+    text: str
+
+@dataclass
 class SceneFacts:
     start: float
     end: float
@@ -814,6 +833,7 @@ class SceneFacts:
     tags: List[str]
 
 def split_text_to_scenes(text: str, scene_ts: List[float]) -> List[SceneFacts]:
+    """Legacy function - ใช้สำหรับ backward compatibility"""
     if not scene_ts: return [SceneFacts(0.0, 0.0, text, "", "", [])]
     scene_ts = sorted(scene_ts)
     ts_bounds = scene_ts + [scene_ts[-1] + 99999]
@@ -829,19 +849,189 @@ def split_text_to_scenes(text: str, scene_ts: List[float]) -> List[SceneFacts]:
         facts.append(SceneFacts(start=s, end=e, speech=chunks[i], visual_caption="", ocr_text="", tags=[]))
     return facts
 
+def split_segments_to_scenes(
+    segments: List[Dict[str, Any]],
+    scene_ts: List[float]
+) -> List[SceneFacts]:
+    """
+    จับคู่ transcript segments กับ scene timestamps โดยใช้ timestamp จริง
+    แต่ละ scene จะมี speech ที่อยู่ในช่วงเวลานั้นจริงๆ
+    
+    ถ้าไม่มี scene_ts (ffmpeg ตรวจไม่เจอ scene cuts):
+    - ใช้ transcript segments สร้าง scene boundaries แทน
+    - แบ่งเป็นกลุ่มละประมาณ 15-30 วินาที
+    """
+    if not segments:
+        return [SceneFacts(0.0, 99999.0, "", "", "", [])]
+    
+    # ถ้าไม่มี scene_ts -> ใช้ transcript segments สร้าง scene boundaries
+    if not scene_ts:
+        log("⚠️ No scene cuts detected, using transcript segments as boundaries")
+        
+        # กลุ่ม segments เป็นช่วงละ ~15-30 วินาที
+        SCENE_DURATION = 20.0  # วินาที
+        facts: List[SceneFacts] = []
+        
+        current_start = segments[0].get("start", 0)
+        current_texts = []
+        
+        for seg in segments:
+            seg_end = seg.get("end", 0)
+            seg_text = seg.get("text", "").strip()
+            
+            # ถ้ายังอยู่ในช่วงเวลาปัจจุบัน ให้รวมข้อความ
+            if seg_end - current_start < SCENE_DURATION:
+                current_texts.append(seg_text)
+            else:
+                # จบช่วงปัจจุบัน สร้าง SceneFacts
+                if current_texts:
+                    facts.append(SceneFacts(
+                        start=current_start,
+                        end=seg.get("start", current_start + SCENE_DURATION),
+                        speech=" ".join(current_texts),
+                        visual_caption="",
+                        ocr_text="",
+                        tags=[]
+                    ))
+                # เริ่มช่วงใหม่
+                current_start = seg.get("start", 0)
+                current_texts = [seg_text]
+        
+        # เพิ่ม scene สุดท้าย
+        if current_texts:
+            last_end = segments[-1].get("end", current_start + SCENE_DURATION)
+            facts.append(SceneFacts(
+                start=current_start,
+                end=last_end,
+                speech=" ".join(current_texts),
+                visual_caption="",
+                ocr_text="",
+                tags=[]
+            ))
+        
+        log(f"✅ Created {len(facts)} scenes from transcript segments")
+        return facts if facts else [SceneFacts(0.0, 99999.0, " ".join(s.get("text", "") for s in segments), "", "", [])]
+    
+    scene_ts = sorted(scene_ts)
+    # สร้าง bounds: [(start1, end1), (start2, end2), ...]
+    bounds = []
+    for i, ts in enumerate(scene_ts):
+        if i < len(scene_ts) - 1:
+            bounds.append((ts, scene_ts[i+1]))
+        else:
+            bounds.append((ts, ts + 99999))
+    
+    facts: List[SceneFacts] = []
+    for start, end in bounds:
+        # หา segments ที่อยู่ในช่วงเวลานี้
+        matching_segs = []
+        for seg in segments:
+            seg_start = seg.get("start", 0)
+            seg_end = seg.get("end", 0)
+            seg_mid = (seg_start + seg_end) / 2
+            # ใช้จุดกึ่งกลางของ segment ตัดสินว่าอยู่ใน scene ไหน
+            if start <= seg_mid < end:
+                matching_segs.append(seg.get("text", "").strip())
+        
+        speech = " ".join(matching_segs)
+        facts.append(SceneFacts(
+            start=start,
+            end=end,
+            speech=speech,
+            visual_caption="",
+            ocr_text="",
+            tags=[]
+        ))
+    
+    return facts
+
+def check_visual_relevance(speech: str, visual_caption: str) -> bool:
+    """
+    ตรวจว่า visual caption เกี่ยวข้องกับ speech หรือไม่
+    คืนค่า True ถ้าควร merge, False ถ้าไม่ควร
+    
+    เกณฑ์การตัดสิน:
+    1. มีคำซ้อนทับกันอย่างน้อย 1 คำสำคัญ (ไม่นับ stopwords)
+    2. หรือ visual มีข้อมูลที่มีประโยชน์ (ตัวเลข, %, เวลา, ชื่อเฉพาะ)
+    """
+    if not speech or not visual_caption:
+        return False
+    
+    # Stopwords ภาษาไทย/อังกฤษ ที่ไม่ควรนับ
+    STOPWORDS = {
+        "ที่", "ใน", "ของ", "และ", "เป็น", "มี", "ได้", "ให้", "กับ", "จาก", "ไป", "มา", "อยู่", "แล้ว",
+        "นี้", "นั้น", "ก็", "จะ", "ว่า", "ไม่", "เรา", "เขา", "คุณ", "ผม", "ฉัน", "ครับ", "ค่ะ",
+        "the", "a", "an", "is", "are", "was", "were", "on", "in", "at", "to", "for", "of", "with"
+    }
+    
+    # Tokenize ทั้งสอง (แบบง่าย)
+    def tokenize(text: str) -> set:
+        # ตัดเฉพาะ alphanumeric + ไทย
+        tokens = re.findall(r"[ก-๙a-zA-Z0-9]+", text.lower())
+        # กรอง stopwords และคำสั้นเกินไป
+        return {t for t in tokens if t not in STOPWORDS and len(t) > 1}
+    
+    speech_tokens = tokenize(speech)
+    visual_tokens = tokenize(visual_caption)
+    
+    # ตรวจคำซ้อนทับ
+    overlap = speech_tokens & visual_tokens
+    if len(overlap) >= 2:  # มีคำตรงกันอย่างน้อย 2 คำ
+        return True
+    
+    # ตรวจว่า visual มีข้อมูลที่มีประโยชน์ (ตัวเลข, %, เวลา)
+    has_useful_data = bool(
+        RE_NUMBER.search(visual_caption) or
+        RE_PERCENT.search(visual_caption) or
+        RE_TIMECODE.search(visual_caption) or
+        RE_DATE.search(visual_caption) or
+        RE_CURRENCY.search(visual_caption)
+    )
+    
+    if has_useful_data and len(overlap) >= 1:
+        return True
+    
+    # ไม่เกี่ยวข้อง
+    return False
+
 def enrich_scenes_with_captions(facts: List[SceneFacts], captions: List[Dict[str,Any]]) -> List[SceneFacts]:
+    """
+    จับคู่และ MERGE visual captions เข้ากับ scenes ตาม timestamp
+    - Visual caption จะถูกรวมเฉพาะเมื่ออยู่ในช่วงเวลาเดียวกัน
+    - ตรวจ RELEVANCE ก่อน: caption ต้องเกี่ยวข้องกับ speech ด้วย
+    - ช่วยเพิ่มรายละเอียดที่ transcript อาจไม่มี (ตัวเลข, ชื่อเฉพาะ)
+    """
     for sc in facts:
-        candidates = [c for c in captions if sc.start - 0.5 <= c["ts"] <= sc.end + 0.5] or \
-                     sorted(captions, key=lambda c: abs(c["ts"]-sc.start))[:1]
+        # หา captions ที่อยู่ในช่วงเวลาเดียวกัน (±2 วินาที tolerance)
+        matched_caps = [
+            c for c in captions 
+            if c.get("ts") is not None and sc.start - 2.0 <= c["ts"] <= sc.end + 2.0
+        ]
+        
+        # ถ้าไม่มี exact match ก็หา closest 1 อัน (ถ้าห่างไม่เกิน 10 วินาที)
+        if not matched_caps and captions:
+            sorted_caps = sorted(captions, key=lambda c: abs(c.get("ts", 0) - sc.start))
+            closest = sorted_caps[0]
+            if abs(closest.get("ts", 0) - sc.start) <= 10.0:
+                matched_caps = [closest]
+        
         vc, ocrs, tags = [], [], []
-        for c in candidates:
-            if c.get("caption_detailed"): vc.append(c["caption_detailed"])
-            elif c.get("caption_short"): vc.append(c["caption_short"])
-            if c.get("ocr_text"): ocrs.append(c["ocr_text"])
-            tags.extend(c.get("tags", []))
+        for c in matched_caps:
+            cap_text = c.get("caption_detailed") or c.get("caption_short") or ""
+            
+            # ✅ RELEVANCE CHECK: ตรวจว่าเกี่ยวข้องก่อน merge
+            if check_visual_relevance(sc.speech, cap_text):
+                vc.append(cap_text)
+                if c.get("ocr_text"): 
+                    ocrs.append(c["ocr_text"])
+                tags.extend(c.get("tags", []))
+            else:
+                log(f"⚠️ Skipped irrelevant visual: '{cap_text[:50]}...' for speech: '{sc.speech[:50]}...'")
+        
         sc.visual_caption = ensure_thai(" ".join(vc).strip()) if vc else ""
         sc.ocr_text = ensure_thai(" ".join(ocrs).strip()) if ocrs else ""
         sc.tags = sorted(list(set(tags)))
+    
     return facts
 
 # ====== STEP 5: Visual Evidence (domain-agnostic) ======
@@ -1276,10 +1466,30 @@ def self_critique_and_rewrite(draft: str, target_min_words: int, target_max_word
 # ===== NEW: สร้าง 'บทความสั้น' ภาษาไทย โดยใช้ทั้ง transcript+visual =====
 def summarize_article_th(transcript: str,
                          items: List[Dict[str, Any]],
-                         target_min_words: int = 300,
-                         target_max_words: int = 400) -> str:
-    """สร้างบทความภาษาไทยจาก transcript + visual bullets (รอบเดียว, ไม่ polish, ไม่ retry, ไม่ lock)"""
+                         target_min_words: int = None,
+                         target_max_words: int = None) -> str:
+    """
+    สร้างบทความภาษาไทยจาก transcript + visual bullets
+    ความยาว summary ปรับตามความยาว transcript อัตโนมัติ
+    """
     transcript_src = ensure_thai(transcript) or ""
+    
+    # คำนวณความยาว transcript (ประมาณ)
+    transcript_word_count = word_count_th(transcript_src)
+    
+    # Dynamic target: ปรับความยาวตาม transcript
+    # < 800 คำ: ไม่จำกัด (ให้ LLM สรุปตามเหมาะสม)
+    # >= 800 คำ: 300-400 คำ
+    if target_min_words is None or target_max_words is None:
+        if transcript_word_count < 800:
+            target_min_words = None  # ไม่จำกัด
+            target_max_words = None
+            log(f"📝 Transcript: ~{transcript_word_count} words → No length limit")
+        else:
+            target_min_words = 300
+            target_max_words = 400
+            log(f"📝 Transcript: ~{transcript_word_count} words → Target summary: 300-400 words")
+    
     if len(transcript_src) > 12000:
         head = transcript_src[:5000]
         mid  = transcript_src[len(transcript_src)//2-1500: len(transcript_src)//2+1500]
@@ -1294,33 +1504,47 @@ def summarize_article_th(transcript: str,
             vis_points.append(txt)
     vis_points = dedup_and_rerank(vis_points, max_items=4)
 
-    # ---- prompt หลัก (เน้นไม่ให้แก้ชื่อ แต่ไม่ใช้ lock) ----
+    # ---- prompt หลัก: ห้ามหัวข้อ, ห้ามแต่งเรื่องเพิ่ม, ห้ามน้ำ ----
+    length_instruction = f"ความยาวประมาณ {target_min_words}-{target_max_words} คำ" if target_min_words else "สรุปให้กระชับตามความเหมาะสม"
     prompt = f"""
-เขียนบทความภาษาไทยแบบเล่าเรื่องความยาวประมาณ {target_min_words}-{target_max_words} คำ 
-โดยอ้างอิง TRANSCRIPT ด้านล่างเป็นหลัก และผสาน "หลักฐานจากภาพ" เท่าที่จำเป็น
-**ข้อกำหนดการเขียน**
-- อินโทรเกริ่นภาพรวมสั้น ๆ เพื่อให้เข้าใจว่าประเด็นหลักคืออะไรและทำไมสำคัญ  
-- จากนั้นอธิบายเนื้อหาหลักแบบต่อเนื่อง 2–4 ย่อหน้า (ห้ามใช้หัวข้อย่อย/บูลเล็ต/เลขลิสต์)  
-- ห้ามพูดซ้ำใจความเดิมหรือตัวเลขเดิมเกิน 1 ครั้ง  
-- ใช้คำเชื่อมให้ลื่นไหล อ่านเข้าใจตั้งแต่ต้นจนจบ  
-- ห้ามขึ้นต้นด้วยคำว่า "สวัสดี", "วันนี้", "บทความนี้", "เราจะมาดู"  
-- หลีกเลี่ยงการเปลี่ยนชื่อเฉพาะ/ตัวย่อ/ชื่อบุคคล/ตัวเลขใน TRANSCRIPT  
-- ปิดท้ายด้วยข้อคิดหรือข้อสังเกตเชิงเหตุผลสั้น ๆ ที่สอดคล้องกับเนื้อหา  
+สรุปเนื้อหาด้านล่างให้เป็นบทความภาษาไทย {length_instruction}
 
-[TRANSCRIPT]
+**ข้อห้ามที่ต้องปฏิบัติตามอย่างเคร่งครัด**
+1. ห้ามใส่หัวข้อ/ชื่อบทความ (เช่น **ความสำคัญของ...** หรือ # หัวข้อ) 
+2. ห้ามใช้ตัวหนา (**) หรือ markdown ใดๆ
+3. ห้ามใช้บูลเล็ต/เลขลิสต์
+4. ห้ามแต่งเรื่องหรือข้อมูลที่ไม่มีในเนื้อหา
+5. ห้ามขึ้นต้นด้วย "สวัสดี", "วันนี้", "บทความนี้", "เราจะมาดู", "ในปัจจุบัน"
+6. ห้ามพูดถึงคำว่า "transcript", "เนื้อหานี้", "ข้อความนี้", "ผู้พูด" - เขียนเป็นเนื้อหาตรงๆ
+
+**ข้อกำหนดสำคัญ**
+- คงตัวเลข/เวลา/จำนวน/ชื่อเฉพาะตามต้นฉบับ
+- เขียนเป็นย่อหน้าต่อเนื่อง เล่าเนื้อหาตรงๆ
+- ใช้เฉพาะข้อมูลที่มีในเนื้อหาเท่านั้น
+
+[เนื้อหา]
 {transcript_src}
 
-[หลักฐานจากภาพ]
-{chr(10).join(f"- {p}" for p in vis_points)}
+[หลักฐานจากภาพ - ใช้เสริมเฉพาะถ้าเกี่ยวข้อง]
+{chr(10).join(f"- {p}" for p in vis_points) if vis_points else "(ไม่มี)"}
 """
 
     # ---- เรียก LLM "ครั้งเดียว" ----
-    # ถ้า GEN_OPTS_QUALITY มีอยู่แล้วจะใช้เลย; เสริม temp ต่ำเพื่อลดการ "แก้ชื่อ" โดยพลการ
     GEN_OPTS = {
         **GEN_OPTS_QUALITY,
-        "num_predict": 900,   # ~900 token พอสำหรับ 300-400 คำไทย
+        "num_predict": 900,
     }
     raw = ensure_thai(ollama_summarize(prompt, options=GEN_OPTS)) or ""
+    
+    # ---- Post-processing: ลบหัวข้อ/markdown ที่ LLM อาจใส่มา ----
+    # ลบ markdown headers
+    raw = re.sub(r"^#+\s*.+$", "", raw, flags=re.MULTILINE)
+    # ลบ **หัวข้อ**
+    raw = re.sub(r"\*\*[^*]+\*\*", "", raw)
+    # ลบบรรทัดว่างหลายบรรทัดติดกัน
+    raw = re.sub(r"\n{3,}", "\n\n", raw)
+    # strip
+    raw = raw.strip()
     
     return raw
 
@@ -1367,8 +1591,8 @@ def main():
     download_time = download_t - t0
     send_progress("โหลดวิดีโอ", 10, 100)
 
-    # 2) Transcript (บังคับไทย)
-    transcript = transcribe_whisper(AUDIO_OUT,WHISPER_MODEL,LANGUAGE,ASR_DEVICE,step_start=10,step_end=45)
+    # 2) Transcript (บังคับไทย) - ได้ segments พร้อม timestamps
+    transcript, segments = transcribe_whisper(AUDIO_OUT,WHISPER_MODEL,LANGUAGE,ASR_DEVICE,step_start=10,step_end=45)
     # transcript = iapp_asr_api(AUDIO_OUT, "audio.wav")
     asr_t = time.time()
     asr_time = asr_t - download_t
@@ -1385,7 +1609,8 @@ def main():
     # with open(SCENES_JSON, "w", encoding="utf-8") as f:
     #     json.dump(scene_ts, f, ensure_ascii=False, indent=2)
 
-    facts = split_text_to_scenes(transcript, scene_ts)
+    # ใช้ split_segments_to_scenes ที่จับคู่ตาม timestamp จริง
+    facts = split_segments_to_scenes(segments, scene_ts)
     facts = enrich_scenes_with_captions(facts, caps)
     frames_count = len(caps)
     with open(SCENE_FACTS_JSON, "w", encoding="utf-8") as f:
@@ -1406,7 +1631,7 @@ def main():
     with open(FINAL_TXT, "w", encoding="utf-8") as f:
         f.write(ensure_thai(bullets_txt, max_chars=900))
 
-    article_th = summarize_article_th(transcript, items, target_min_words=300, target_max_words=400)
+    article_th = summarize_article_th(transcript, items)
     send_progress("ทำสรุป", 90, 67)
     with open(FINAL_ARTICLE_TXT, "w", encoding="utf-8") as f:
         f.write(wrap_text(article_th))

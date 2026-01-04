@@ -54,6 +54,7 @@ def main():
     pipeline.DROPDOWN_JSON     = os.path.join(summary_dir, "dropdown_items.json")
     pipeline.FINAL_TXT         = os.path.join(summary_dir, "dropdown_list.txt")
     pipeline.FINAL_ARTICLE_TXT = os.path.join(summary_dir, "summary.txt")
+    pipeline.TRANSCRIPT_SEGMENTS = os.path.join(summary_dir, "transcript_segments.json")
     pipeline.METRICS_JSON      = os.path.join(summary_dir, "metrics.json")
 
     # รัน pipeline

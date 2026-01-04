@@ -24,26 +24,35 @@ export class SummarizeService {
   }
 
   async createSummary(youtubeUrl: string, userId: number) {
+    // Check if cache is disabled via env
+    const disableCache = this.configService.get<string>('DISABLE_CACHE') === 'true';
+    
     // Cache-first: Check if video already processed (space-based lookup)
-    const cached = await this.videoCacheService.getCachedSummary(youtubeUrl);
-    if (cached) {
-      console.log(`Cache HIT for ${youtubeUrl}, returning existing summary`);
-      return { jobId: cached.id, status: 'CACHED' as const, fromCache: true };
+    if (!disableCache) {
+      const cached = await this.videoCacheService.getCachedSummary(youtubeUrl);
+      if (cached) {
+        console.log(`Cache HIT for ${youtubeUrl}, returning existing summary`);
+        return { jobId: cached.id, status: 'CACHED' as const, fromCache: true };
+      }
+    } else {
+      console.log(`Cache DISABLED, skipping cache lookup`);
     }
 
-    // Check DB for existing completed summary
-    const existing = await this.prisma.summary.findFirst({
-      where: { youtubeUrl, status: 'DONE' },
-    });
-    if (existing) {
-      // Warm the cache for next time
-      await this.videoCacheService.setCachedSummary(youtubeUrl, {
-        id: existing.id,
-        youtubeUrl: existing.youtubeUrl,
-        status: 'DONE',
+    // Check DB for existing completed summary (skip if cache disabled)
+    if (!disableCache) {
+      const existing = await this.prisma.summary.findFirst({
+        where: { youtubeUrl, status: 'DONE' },
       });
-      console.log(`DB HIT for ${youtubeUrl}, cached and returning`);
-      return { jobId: existing.id, status: 'CACHED' as const, fromCache: true };
+      if (existing) {
+        // Warm the cache for next time
+        await this.videoCacheService.setCachedSummary(youtubeUrl, {
+          id: existing.id,
+          youtubeUrl: existing.youtubeUrl,
+          status: 'DONE',
+        });
+        console.log(`DB HIT for ${youtubeUrl}, cached and returning`);
+        return { jobId: existing.id, status: 'CACHED' as const, fromCache: true };
+      }
     }
 
     // Cache miss - create new job
