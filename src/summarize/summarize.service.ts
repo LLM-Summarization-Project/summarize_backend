@@ -64,8 +64,9 @@ export class SummarizeService {
     console.log(`Created summary record with ID: ${id}`);
 
     // ส่งงานเข้า BullMQ พร้อม whisperTemp ณ เวลา submit
+    // cache .env
     // const whisperTemp = parseFloat(this.configService.get<string>('WHISPER_TEMP') ?? '0.0');
-    // อ่านจากไฟล์ .env โดยตรง (ไม่ cache) เพื่อให้ batch script เปลี่ยนค่าได้
+    // อ่านจากไฟล์ .env โดยตรง (ไม่ cache) เพื่อให้ batch script เปลี่ยนค่าได้ ต้องมา comment, uncomment ด้านบนเพื่อให้ cache ทำงาน
     const whisperTemp = await this.readWhisperTempFromEnvFile();
     console.log(`Using WHISPER_TEMP: ${whisperTemp}`);
     await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId, whisperTemp });
