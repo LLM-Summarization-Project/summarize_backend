@@ -22,7 +22,7 @@ WHISPER_TEMPS = [0.0, 0.2, 0.4, 0.6]
 ENV_FILE = Path(__file__).parent.parent / ".env"
 
 # ⚠️ ใส่ refresh token ที่นี่
-REFRESH_TOKEN = os.getenv("REFRESH_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjIsImlhdCI6MTc2NzU0MjE2MywiZXhwIjoxNzY4MTQ2OTYzfQ.LYp1UndWyQ0VdXSMCBlI9RCvRvEIyTuc7DCc6NiKHLs")
+REFRESH_TOKEN = os.getenv("REFRESH_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjYsImlhdCI6MTc2NzczNTc3MCwiZXhwIjoxNzY4MzQwNTcwfQ.eeJjnK1B9Md4NXFyVcWQGzC6LkmTpObCaDMVpQ87ZQU")
 
 # Access token (จะ refresh อัตโนมัติ)
 ACCESS_TOKEN = ""
@@ -88,7 +88,7 @@ def update_env_whisper_temp(temp: float):
     print(f"   📝 Updated .env: WHISPER_TEMP={temp}")
     return True
 
-def wait_for_completion(job_id: str, timeout: int = 600) -> dict:
+def wait_for_completion(job_id: str, timeout: int = 10800) -> dict:  # 3 hours
     """รอจนกว่า job จะเสร็จ"""
     start = time.time()
     while time.time() - start < timeout:

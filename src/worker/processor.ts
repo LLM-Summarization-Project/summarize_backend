@@ -381,7 +381,7 @@ export async function processor(job: Job) {
                     }
 
                     try {
-                        await axios.post(`${ontology}/ontology/topic`, {
+                        await axios.post(`http://localhost:8081/ontology/topic`, {
                             userId,
                             name: metrics.keyword,
                             description: summaryContent,
