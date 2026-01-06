@@ -1,5 +1,6 @@
 # ========= Stage 1: Build Node.js (ใช้ official node image) =========
-FROM node:20-slim AS node-builder
+# ใช้ bookworm-slim เพื่อให้ OpenSSL version ตรงกับ runner stage (3.0.x)
+FROM node:20-bookworm-slim AS node-builder
 WORKDIR /app
 
 # ติดตั้ง dependency ของ Node
