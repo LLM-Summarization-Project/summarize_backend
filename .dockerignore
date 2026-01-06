@@ -13,3 +13,8 @@ Dockerfile
 # Ignore test and config files not needed for build
 coverage
 *.spec.ts
+
+outputs
+*.mp3
+*.mp4
+*.wav
