@@ -118,12 +118,16 @@ def wait_for_completion(job_id: str, timeout: int = 600) -> dict:
     
     return {"status": "timeout"}
 
-def submit_job(url: str) -> dict:
-    """ส่ง job ไป queue"""
+def submit_job(url: str, temp: float = None) -> dict:
+    """ส่ง job ไป queue พร้อม whisperTemp"""
     try:
+        payload = {"youtubeUrl": url}
+        if temp is not None:
+            payload["whisperTemp"] = temp
+            
         resp = requests.post(
             f"{API_BASE}/summary",
-            json={"youtubeUrl": url},
+            json=payload,
             headers=get_headers()
         )
         
@@ -131,7 +135,7 @@ def submit_job(url: str) -> dict:
             if refresh_access_token():
                 resp = requests.post(
                     f"{API_BASE}/summary",
-                    json={"youtubeUrl": url},
+                    json=payload,
                     headers=get_headers()
                 )
         
@@ -163,8 +167,6 @@ def run_batch(url_file: str):
     print(f"📋 พบ {len(urls)} URLs × {len(WHISPER_TEMPS)} temps = {total_jobs} jobs")
     print(f"🌡️ WHISPER_TEMPS: {WHISPER_TEMPS}")
     print(f"🔗 API: {API_BASE}")
-    print("")
-    print("⚠️  หมายเหตุ: Script จะอัพเดท .env และ ต้อง restart worker ด้วยตัวเอง")
     print("=" * 60)
     
     # Refresh token ก่อน
@@ -180,22 +182,15 @@ def run_batch(url_file: str):
         print(f"🌡️ เริ่มรอบ WHISPER_TEMP = {temp}")
         print(f"{'='*60}")
         
-        # อัพเดท .env
-        update_env_whisper_temp(temp)
-        
-        # รอให้ user restart worker (หรือรอให้ hot-reload)
-        print("   ⏳ รอ 5 วินาทีให้ worker reload...")
-        time.sleep(5)
-        
         for url in urls:
             job_num += 1
             print(f"\n[{job_num}/{total_jobs}] 🎬 {url}")
             print(f"   🌡️ WHISPER_TEMP = {temp}")
             start_time = time.time()
             
-            # 1) ส่ง job
+            # 1) ส่ง job พร้อม whisperTemp ใน request body
             print("   📤 Submitting job...")
-            submit_result = submit_job(url)
+            submit_result = submit_job(url, temp)
             
             if "error" in submit_result:
                 print(f"   ❌ Submit failed: {submit_result['error']}")

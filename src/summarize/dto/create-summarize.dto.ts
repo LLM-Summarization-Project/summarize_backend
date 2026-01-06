@@ -1,4 +1,4 @@
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 export class SummarizeRequestDto {
     @ApiProperty({
@@ -6,6 +6,12 @@ export class SummarizeRequestDto {
         description: 'ลิงก์ Youtube ที่ต้องการสรุปเนื้อหา'
     })
     youtubeUrl: string;
+
+    @ApiPropertyOptional({
+        example: 0.0,
+        description: 'Whisper temperature (0.0-1.0). ถ้าไม่ส่งจะใช้ค่าจาก environment'
+    })
+    whisperTemp?: number;
 }
 
 export type SummaryStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'ERROR' | 'CANCEL';
