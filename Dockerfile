@@ -1,9 +1,5 @@
-# ใช้ Python base ที่มี venv + requirements ติดตั้งไว้แล้ว
-# จะใช้ tag อะไรก็ได้ ตามที่คุณ build ไว้จากไฟล์แรก
-FROM northpat/summary-python-base:1 AS base
-
-# ========= Stage 1: Build (Node + Prisma + Nest build) =========
-FROM base AS builder
+# ========= Stage 1: Build Node.js (ใช้ official node image) =========
+FROM node:20-slim AS node-builder
 WORKDIR /app
 
 # ติดตั้ง dependency ของ Node
@@ -14,25 +10,33 @@ RUN npm ci
 COPY prisma ./prisma
 RUN npx prisma generate
 
-# โค้ดแอป + python scripts
-COPY python ./python
+# โค้ดแอป
 COPY . .
 
 # build NestJS
 RUN npm run build
 
-# ========= Stage 2: Runtime =========
-FROM base AS runner
+# ========= Stage 2: Runtime (Python base + Node.js runtime) =========
+FROM northpat/summary-python-base:1 AS runner
 WORKDIR /app
 
-# ดึงไฟล์ที่ build แล้วเข้ามา
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/python ./python
+# ติดตั้ง Node.js runtime
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
-# base มี /opt/venv + PATH แล้ว ไม่ต้อง COPY /opt/venv อีก
-# ถ้าอยาก prune dev deps ของ Node
+# ดึงไฟล์ที่ build แล้วเข้ามา
+COPY --from=node-builder /app/dist ./dist
+COPY --from=node-builder /app/node_modules ./node_modules
+COPY --from=node-builder /app/package*.json ./
+COPY --from=node-builder /app/prisma ./prisma
+
+# Python scripts
+COPY python ./python
+
+# Prune dev deps
 RUN npm prune --omit=dev
 
 EXPOSE 3000
