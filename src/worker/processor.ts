@@ -56,10 +56,11 @@ async function cacheSummary(youtubeUrl: string, summaryId: string) {
 
 export async function processor(job: Job) {
 
-    const { summaryId, youtubeUrl, userId } = job.data as {
+    const { summaryId, youtubeUrl, userId, whisperTemp } = job.data as {
         summaryId: string;
         youtubeUrl: string;
         userId: number;
+        whisperTemp: number;
     };
 
     let cancelledByUser = false;
@@ -99,6 +100,8 @@ export async function processor(job: Job) {
             ...(process.env.OLLAMA_MODEL
                 ? ['--ollama_model', process.env.OLLAMA_MODEL]
                 : []),
+            '--whisper_temp',
+            String(whisperTemp ?? 0.0),
             '--summary_id',
             summaryId,
         ],
