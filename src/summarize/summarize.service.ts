@@ -23,7 +23,7 @@ export class SummarizeService {
     });
   }
 
-  async createSummary(youtubeUrl: string, userId: number) {
+  async createSummary(youtubeUrl: string, userId: number, whisperTempParam?: number) {
     // Check if cache is disabled via env
     const disableCache = this.configService.get<string>('DISABLE_CACHE') === 'true';
     
@@ -63,12 +63,10 @@ export class SummarizeService {
     });
     console.log(`Created summary record with ID: ${id}`);
 
-    // ส่งงานเข้า BullMQ พร้อม whisperTemp ณ เวลา submit
-    // cache .env
-    // const whisperTemp = parseFloat(this.configService.get<string>('WHISPER_TEMP') ?? '0.0');
-    // อ่านจากไฟล์ .env โดยตรง (ไม่ cache) เพื่อให้ batch script เปลี่ยนค่าได้ ต้องมา comment, uncomment ด้านบนเพื่อให้ cache ทำงาน
-    const whisperTemp = await this.readWhisperTempFromEnvFile();
-    console.log(`Using WHISPER_TEMP: ${whisperTemp}`);
+    // ส่งงานเข้า BullMQ พร้อม whisperTemp
+    // ถ้ามีค่าจาก request body ใช้ค่านั้น, ถ้าไม่มีอ่านจาก .env
+    const whisperTemp = whisperTempParam ?? await this.readWhisperTempFromEnvFile();
+    console.log(`Using WHISPER_TEMP: ${whisperTemp} (from ${whisperTempParam !== undefined ? 'request' : 'env'})`);
     await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId, whisperTemp });
 
     return { jobId: id, status: 'QUEUED' as const };

@@ -31,7 +31,11 @@ export class SummarizeController {
     },
   })
   createSummary(@Body() summarizeRequestDto: SummarizeRequestDto, @Req() req) {
-    return this.summarizeService.createSummary(summarizeRequestDto.youtubeUrl, req.user.id);
+    return this.summarizeService.createSummary(
+      summarizeRequestDto.youtubeUrl, 
+      req.user.id,
+      summarizeRequestDto.whisperTemp
+    );
   }
 
   @Get('all')
