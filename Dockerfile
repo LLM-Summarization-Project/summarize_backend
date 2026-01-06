@@ -1,5 +1,6 @@
 # ========= Stage 1: Build Node.js (ใช้ official node image) =========
-FROM node:20-slim AS node-builder
+# ใช้ bookworm-slim เพื่อให้ OpenSSL version ตรงกับ runner stage (3.0.x)
+FROM node:20-bookworm-slim AS node-builder
 WORKDIR /app
 
 # ติดตั้ง dependency ของ Node
@@ -32,6 +33,9 @@ COPY --from=node-builder /app/dist ./dist
 COPY --from=node-builder /app/node_modules ./node_modules
 COPY --from=node-builder /app/package*.json ./
 COPY --from=node-builder /app/prisma ./prisma
+
+# Re-generate Prisma client for the correct runtime platform (OpenSSL version)
+RUN npx prisma generate
 
 # Python scripts
 COPY python ./python

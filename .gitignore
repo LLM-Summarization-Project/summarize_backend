@@ -58,5 +58,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # all outputs
 /outputs
 Summary.csv
+urls.txt
 
 /generated/prisma
