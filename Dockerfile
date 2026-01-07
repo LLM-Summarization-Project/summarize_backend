@@ -18,7 +18,7 @@ COPY . .
 RUN npm run build
 
 # ========= Stage 2: Runtime (Python base + Node.js runtime) =========
-FROM northpat/summary-python-base:1 AS runner
+FROM northpat/summary-python-base:2 AS runner
 WORKDIR /app
 
 # ติดตั้ง Node.js runtime

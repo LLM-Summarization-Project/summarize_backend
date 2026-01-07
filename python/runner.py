@@ -24,6 +24,8 @@ def main():
     p.add_argument("--ollama_api", default=None)
     p.add_argument("--ollama_model", default=None)
     p.add_argument("--summary_id", default=str(int(time.time())))
+    p.add_argument("--no_youtube_transcript", action="store_true", default=False,
+                   help="ไม่ใช้ YouTube Transcript API (บังคับใช้ Whisper)")
     args = p.parse_args()
 
     # โฟลเดอร์สำหรับ summary เดียวกัน เช่น outputs/A/
@@ -39,6 +41,9 @@ def main():
     pipeline.ASR_DEVICE    = args.asr_device
     pipeline.VL_DEVICE     = args.vl_device
     pipeline.WHISPER_TEMP  = args.whisper_temp
+    
+    # YouTube Transcript API toggle (default: True, ถ้าใส่ --no_youtube_transcript จะเป็น False)
+    pipeline.USE_YOUTUBE_TRANSCRIPT = not args.no_youtube_transcript
 
     if args.ollama_api:
         os.environ["OLLAMA_API"] = args.ollama_api

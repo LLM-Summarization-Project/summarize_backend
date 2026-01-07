@@ -96,10 +96,10 @@ export async function processor(job: Job) {
             process.env.WHISPER_MODEL ?? 'large-v3-turbo',
             ...(process.env.OLLAMA_API
                 ? ['--ollama_api', process.env.OLLAMA_API]
-                : []),
+                : ['--ollama_api', 'http://host.docker.internal:11434/api/chat']),
             ...(process.env.OLLAMA_MODEL
                 ? ['--ollama_model', process.env.OLLAMA_MODEL]
-                : []),
+                : ['--ollama_model', 'scb10x/llama3.1-typhoon2-8b-instructx']),
             '--whisper_temp',
             String(whisperTemp ?? 0.0),
             '--summary_id',

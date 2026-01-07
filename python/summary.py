@@ -85,6 +85,7 @@ VL_DEVICE  = "cuda"     # ใช้กับ Florence เท่านั้น
 VL_MODEL_NAME = "microsoft/Florence-2-base"
 SCENE_THRESH = 0.6
 ENABLE_OCR = False
+USE_YOUTUBE_TRANSCRIPT = True  # ใช้ youtube_transcript_api เป็นทางเลือกแรก (เร็วกว่า Whisper มาก)
 
 # ใช้ 127.0.0.1 กันปัญหา IPv6/localhost บางเครื่อง
 OLLAMA_API = os.environ.get("OLLAMA_API", "http://127.0.0.1:11434/api/chat")
@@ -576,6 +577,125 @@ def transcribe_whisper(
     log("✅ Transcription done.")
 
     return text, segments
+
+
+# ====== STEP 2B: YouTube Transcript API (ทางเลือกที่ 2 - เร็วกว่า Whisper มาก) ======
+def extract_video_id(url: str) -> str:
+    """ดึง video ID จาก YouTube URL"""
+    import re
+    patterns = [
+        r'(?:v=|/v/|youtu\.be/|/embed/|/shorts/)([a-zA-Z0-9_-]{11})',
+        r'^([a-zA-Z0-9_-]{11})$'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return ""
+
+def transcribe_youtube_api(
+    youtube_url: str,
+    language: str = "th",
+    step_start: int = 10,
+    step_end: int = 45,
+) -> tuple[str, List[Dict[str, Any]]]:
+    """
+    ดึง transcript จาก YouTube โดยใช้ youtube_transcript_api
+    เร็วกว่า Whisper มากเพราะไม่ต้องโหลด audio และ process
+    
+    Returns:
+        tuple: (full_text, segments)
+        - full_text: ข้อความทั้งหมด
+        - segments: list of {start, end, text} สำหรับจับคู่กับ visual
+    """
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except ImportError:
+        raise RuntimeError("❌ youtube_transcript_api ไม่ได้ติดตั้ง: pip install youtube-transcript-api")
+    
+    video_id = extract_video_id(youtube_url)
+    if not video_id:
+        raise ValueError(f"❌ ไม่สามารถดึง video ID จาก URL: {youtube_url}")
+    
+    log(f"🔄 Fetching YouTube transcript for video: {video_id}")
+    send_progress("ถอดเสียง", step_start, 0)
+    
+    try:
+        # ใช้ API format ใหม่ (version 1.x)
+        ytt_api = YouTubeTranscriptApi()
+        
+        # ลองดึง transcript - จะพยายามหา transcript ที่เหมาะสมอัตโนมัติ
+        # ลองภาษาไทยก่อน แล้ว fallback เป็นภาษาอื่น
+        transcript_data = None
+        transcript_type = ""
+        
+        try:
+            # ลองดึงภาษาไทยก่อน
+            transcript_data = ytt_api.fetch(video_id, languages=[language, 'th'])
+            transcript_type = f"thai ({language})"
+            log(f"✅ พบ transcript ภาษาไทย")
+        except Exception as e:
+            log(f"⚠️ ไม่พบ transcript ภาษาไทย: {e}")
+            
+            # ลองดึงภาษาใดก็ได้
+            try:
+                transcript_data = ytt_api.fetch(video_id)
+                transcript_type = "auto"
+                log(f"✅ พบ transcript (auto)")
+            except Exception as e2:
+                raise RuntimeError(f"ไม่พบ transcript: {e2}")
+        
+        send_progress("ถอดเสียง", (step_start + step_end) // 2, 50)
+        
+        # แปลงเป็น format เดียวกับ Whisper
+        # เก็บข้อมูลดิบก่อน แล้วค่อยกำหนด end = start ของตัวถัดไป
+        raw_items = []
+        
+        # transcript_data เป็น FetchedTranscript object, iterate ได้เลย
+        for item in transcript_data:
+            start = item.start
+            text = (item.text or '').strip()
+            if text:
+                raw_items.append({"start": start, "text": text})
+        
+        # สร้าง segments โดยใช้ start ของตัวถัดไปเป็น end
+        segments = []
+        full_text_parts = []
+        for i, item in enumerate(raw_items):
+            if i < len(raw_items) - 1:
+                end_time = raw_items[i + 1]["start"]
+            else:
+                # segment สุดท้าย - ใช้ start + duration โดยประมาณ (5 วินาที)
+                end_time = item["start"] + 5.0
+            
+            segments.append({
+                "start": item["start"],
+                "end": end_time,
+                "text": item["text"]
+            })
+            full_text_parts.append(item["text"])
+        
+        full_text = " ".join(full_text_parts)
+        
+        # ถ้า transcript ไม่ใช่ภาษาไทย ให้แปล
+        if not looks_thai(full_text) and len(full_text) > 50:
+            log("🔄 แปล transcript เป็นภาษาไทย...")
+            full_text = ensure_thai(full_text)
+        
+        # บันทึกไฟล์
+        with open(TRANSCRIPT_TXT, "w", encoding="utf-8") as f:
+            f.write(full_text)
+        
+        with open(TRANSCRIPT_SEGMENTS, "w", encoding="utf-8") as f:
+            json.dump(segments, f, ensure_ascii=False, indent=2)
+        
+        send_progress("ถอดเสียง", step_end, 100)
+        log(f"✅ YouTube Transcript done: {len(segments)} segments ({transcript_type})")
+        
+        return full_text, segments
+        
+    except Exception as e:
+        raise RuntimeError(f"❌ YouTube Transcript API error: {e}")
 
 
 # ====== STEP 3: Image Captioning (+ optional OCR) ======
@@ -1156,21 +1276,42 @@ def main():
     for c in ["ffmpeg", "ffprobe"]:
         check_cmd(c)
 
-    # 1) (เลือก) โหลดเสียง + ตัดฉาก
-    download_audio_wav_16k(YOUTUBE_URL, AUDIO_OUT)
-    duration = get_video_duration(AUDIO_OUT)
-    download_t = time.time()
-    download_time = download_t - t0
-    send_progress("โหลดวิดีโอ", 10, 100)
+    transcript = None
+    segments = None
+    duration = None
+    used_youtube_api = False
+    
+    # 2) Transcript - ลอง YouTube Transcript API ก่อน (ถ้าเปิด)
+    if USE_YOUTUBE_TRANSCRIPT:
+        try:
+            log("📝 ลองใช้ YouTube Transcript API...")
+            transcript, segments = transcribe_youtube_api(YOUTUBE_URL, LANGUAGE, step_start=10, step_end=45)
+            used_youtube_api = True
+            log("✅ ใช้ YouTube Transcript API สำเร็จ!")
+        except Exception as e:
+            log(f"⚠️ YouTube Transcript API ไม่สำเร็จ: {e}")
+            log("🔄 Fallback ไปใช้ Whisper...")
+    
+    # ถ้า YouTube API ไม่สำเร็จ หรือไม่ได้เปิดใช้ -> ใช้ Whisper
+    if transcript is None:
+        # 1) โหลดเสียง + ตัดฉาก
+        download_audio_wav_16k(YOUTUBE_URL, AUDIO_OUT)
+        duration = get_video_duration(AUDIO_OUT)
+        download_t = time.time()
+        download_time = download_t - t0
+        send_progress("โหลดวิดีโอ", 10, 100)
 
-    # 2) Transcript (บังคับไทย) - ได้ segments พร้อม timestamps
-    transcript, segments = transcribe_whisper(AUDIO_OUT,WHISPER_MODEL,LANGUAGE,ASR_DEVICE,step_start=10,step_end=45)
-    # transcript = iapp_asr_api(AUDIO_OUT, "audio.wav")
+        # Transcript ด้วย Whisper
+        transcript, segments = transcribe_whisper(AUDIO_OUT,WHISPER_MODEL,LANGUAGE,ASR_DEVICE,step_start=10,step_end=45)
+    else:
+        send_progress("โหลดวิดีโอ", 10, 100)
+        send_progress("ถอดเสียง", 45, 100)
+        duration = get_video_duration(AUDIO_OUT)
+        download_time = 0 
+    
     asr_t = time.time()
-    asr_time = asr_t - download_t
+    asr_time = asr_t - t0 if not used_youtube_api else 0
     send_progress("ถอดเสียง", 45, 100)
-    # with open(TRANSCRIPT_TXT, "r", encoding="utf-8") as f:
-    #     transcript = f.read()
 
     # 3) Caption + OCR
     captioner = VisionCaptioner(VL_MODEL_NAME, VL_DEVICE)
