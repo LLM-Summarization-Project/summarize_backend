@@ -29,6 +29,72 @@ LOGS_DIR = Path(__file__).parent / "logs"
 # Global log file handle
 LOG_FILE = None
 
+# Session stats tracking
+class SessionStats:
+    """Track session statistics for batch processing"""
+    def __init__(self):
+        self.session_start = time.time()
+        self.jobs_done = 0
+        self.job_times = []  # List of completion times in seconds
+    
+    def add_job(self, elapsed_time: float):
+        """Record a completed job"""
+        self.jobs_done += 1
+        self.job_times.append(elapsed_time)
+    
+    def get_stats(self) -> dict:
+        """Get current session statistics"""
+        total_session_time = time.time() - self.session_start
+        
+        if not self.job_times:
+            return {
+                "session_time": total_session_time,
+                "jobs_done": 0,
+                "total_job_time": 0,
+                "avg": 0,
+                "min": 0,
+                "max": 0
+            }
+        
+        return {
+            "session_time": total_session_time,
+            "jobs_done": self.jobs_done,
+            "total_job_time": sum(self.job_times),
+            "avg": sum(self.job_times) / len(self.job_times),
+            "min": min(self.job_times),
+            "max": max(self.job_times)
+        }
+    
+    def print_stats(self):
+        """Print current session statistics"""
+        stats = self.get_stats()
+        log("")
+        log("📈 ─────────────── Session Stats ───────────────")
+        log(f"   🕐 Session Time:  {self._format_time(stats['session_time'])}")
+        log(f"   ✅ Jobs Done:     {stats['jobs_done']}")
+        log(f"   ⏱️  Total Job Time: {self._format_time(stats['total_job_time'])}")
+        if stats['jobs_done'] > 0:
+            log(f"   📊 Avg/Min/Max:   {stats['avg']:.1f}s / {stats['min']:.1f}s / {stats['max']:.1f}s")
+        log("───────────────────────────────────────────────")
+    
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        """Format seconds to human readable time"""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            mins = int(seconds // 60)
+            secs = seconds % 60
+            return f"{mins}m {secs:.0f}s"
+        else:
+            hours = int(seconds // 3600)
+            mins = int((seconds % 3600) // 60)
+            secs = seconds % 60
+            return f"{hours}h {mins}m {secs:.0f}s"
+
+# Global session stats
+SESSION_STATS = None
+
 # ⚠️ ใส่ refresh token ที่นี่
 REFRESH_TOKEN = os.getenv("REFRESH_TOKEN", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjYsImlhdCI6MTc2NzczNTc3MCwiZXhwIjoxNzY4MzQwNTcwfQ.eeJjnK1B9Md4NXFyVcWQGzC6LkmTpObCaDMVpQ87ZQU")
 
@@ -180,8 +246,13 @@ def run_batch(url_file: str, start_job: int = 1):
         start_job: Job number to start from (1-indexed)
     """
     
+    global SESSION_STATS
+    
     # Setup logging
     log_path = setup_logging()
+    
+    # Initialize session stats
+    SESSION_STATS = SessionStats()
     
     # อ่าน URLs จากไฟล์
     url_path = Path(url_file)
@@ -275,6 +346,9 @@ def run_batch(url_file: str, start_job: int = 1):
                     "time": elapsed, 
                     "job_id": job_id
                 })
+                # Track and print session stats
+                SESSION_STATS.add_job(elapsed)
+                SESSION_STATS.print_stats()
             else:
                 log(f"   ❌ {wait_result['status']} ({elapsed:.1f}s)")
                 results.append({
@@ -284,6 +358,9 @@ def run_batch(url_file: str, start_job: int = 1):
                     "time": elapsed, 
                     "job_id": job_id
                 })
+                # Track and print session stats (even for failed jobs)
+                SESSION_STATS.add_job(elapsed)
+                SESSION_STATS.print_stats()
     
     # สรุปผล
     log("\n" + "=" * 60)
