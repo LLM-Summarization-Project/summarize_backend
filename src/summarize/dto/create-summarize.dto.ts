@@ -12,6 +12,12 @@ export class SummarizeRequestDto {
         description: 'Whisper temperature (0.0-1.0). ถ้าไม่ส่งจะใช้ค่าจาก environment'
     })
     whisperTemp?: number;
+
+    @ApiPropertyOptional({
+        example: false,
+        description: 'ใช้ YouTube Transcript API (true/false). if not set, will be false'
+    })
+    youtubeApi?: boolean;
 }
 
 export type SummaryStatus = 'QUEUED' | 'RUNNING' | 'DONE' | 'ERROR' | 'CANCEL';

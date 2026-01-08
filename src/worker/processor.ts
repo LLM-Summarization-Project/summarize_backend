@@ -56,12 +56,28 @@ async function cacheSummary(youtubeUrl: string, summaryId: string) {
 
 export async function processor(job: Job) {
 
-    const { summaryId, youtubeUrl, userId, whisperTemp } = job.data as {
+    const { summaryId, youtubeUrl, userId, whisperTemp, youtubeApi } = job.data as {
         summaryId: string;
         youtubeUrl: string;
         userId: number;
         whisperTemp: number;
+        youtubeApi: boolean;
     };
+
+    // ✅ ตรวจสอบก่อนว่า job เคยเสร็จ/ยกเลิกไปแล้วหรือยัง (กัน re-run เมื่อ restart)
+    const existing = await prisma.summary.findUnique({
+        where: { id: summaryId },
+        select: { status: true }
+    });
+
+    if (existing?.status === 'DONE') {
+        console.log(`[${summaryId}] Already completed (DONE), skipping...`);
+        return true;
+    }
+    if (existing?.status === 'CANCEL') {
+        console.log(`[${summaryId}] Already cancelled, skipping...`);
+        return true;
+    }
 
     let cancelledByUser = false;
     let cancelTimer: NodeJS.Timeout | null = null;
@@ -102,6 +118,8 @@ export async function processor(job: Job) {
                 : ['--ollama_model', 'scb10x/llama3.1-typhoon2-8b-instructx']),
             '--whisper_temp',
             String(whisperTemp ?? 0.0),
+            '--use_youtube_transcript',
+            String(youtubeApi ?? false),
             '--summary_id',
             summaryId,
         ],

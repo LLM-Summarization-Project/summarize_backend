@@ -820,6 +820,7 @@ def stream_scene_frames_and_caption(url: str,
 
     # ดาวน์โหลดวิดีโอเก็บเป็นไฟล์ชั่วคราว
     video_path = download_video_file(url)
+    duration = get_video_duration(video_path)
 
     def _safe_unlink(p: str):
         try:
@@ -914,6 +915,7 @@ def stream_scene_frames_and_caption(url: str,
         except Exception:
             pass
         _safe_unlink(video_path)
+        return duration
 
 # ====== STEP 4: Merge into scene-level facts ======
 @dataclass
@@ -1165,7 +1167,7 @@ def summarize_article_th(facts: List[SceneFacts],
     combined_segments = []
     total_speech = ""
     for sc in sorted(facts, key=lambda x: x.start):
-        segment = f"[{sc.start:.0f}-{sc.end:.0f}s] {sc.speech}"
+        segment = sc.speech
         if sc.visual_caption:
             segment += f" (ภาพ: {sc.visual_caption})"
         if sc.ocr_text:
@@ -1198,41 +1200,46 @@ def summarize_article_th(facts: List[SceneFacts],
 
     # 4) สร้าง prompt
     length_instruction = f"ความยาวประมาณ {target_min_words}-{target_max_words} คำ" if target_min_words else "สรุปให้กระชับตามความเหมาะสม"
-    prompt = f"""
-สรุปเนื้อหาด้านล่างให้เป็นบทความภาษาไทย {length_instruction}
+    
+    # 5) System prompt - ย้ายข้อห้าม/ข้อกำหนดทั้งหมดมาไว้ที่นี่
+    ARTICLE_SYSTEM = f"""คุณเป็นนักเขียนบทความภาษาไทยมืออาชีพ ทำหน้าที่สรุปเนื้อหาจากคลิปวิดีโอ
 
-**ข้อห้ามที่ต้องปฏิบัติตามอย่างเคร่งครัด**
-1. ห้ามใส่หัวข้อ/ชื่อบทความ (เช่น **ความสำคัญของ...** หรือ # หัวข้อ) 
+ข้อห้ามที่ต้องปฏิบัติตามอย่างเคร่งครัด:
+1. ห้ามใส่หัวข้อ/ชื่อบทความ (เช่น **ความสำคัญของ...** หรือ # หัวข้อ)
 2. ห้ามใช้ตัวหนา (**) หรือ markdown ใดๆ
 3. ห้ามใช้บูลเล็ต/เลขลิสต์
 4. ห้ามแต่งเรื่องหรือข้อมูลที่ไม่มีในเนื้อหา
-5. ห้ามขึ้นต้นด้วย "สวัสดี", "วันนี้", "บทความนี้", "เราจะมาดู", "ในปัจจุบัน"
-6. ห้ามพูดถึงคำว่า "transcript", "เนื้อหานี้", "ข้อความนี้", "ผู้พูด" - เขียนเป็นเนื้อหาตรงๆ
-7. ให้รวมข้อมูลจากภาพเข้าเป็นส่วนหนึ่งของเนื้อหาอย่างเป็นธรรมชาติ
+5. ห้ามขึ้นต้นด้วย "สวัสดี", "วันนี้", "บทความนี้", "คลิปนี้", "เราจะมาดู", "ในปัจจุบัน"
+6. ห้ามพูดถึงคำว่า "transcript", "เนื้อหานี้", "ข้อความนี้", "ผู้พูด"
+7. ห้ามแสดง instructions หรือข้อกำหนดใดๆ ในคำตอบ
 
-**ข้อกำหนดสำคัญ**
-- แต่ละช่วงเวลามีทั้งเสียงพูดและภาพประกอบ (ถ้ามี) - ให้รวมข้อมูลทั้งสองเข้าด้วยกันเป็นประโยคเดียวกัน
-- ถ้าภาพมีตัวเลข/เปอร์เซ็นต์/ข้อมูลเฉพาะ ให้ใส่ในบทความโดยไม่ต้องบอกว่า "จากภาพ"
+ข้อกำหนดสำคัญ:
+- เนื้อหาต้นฉบับมาจากคลิปวิดีโอ - ให้สรุปเป็นบทความเล่าเรื่อง
+- รวมข้อมูลจากภาพเข้าเป็นส่วนหนึ่งของเนื้อหาอย่างเป็นธรรมชาติ
+- ถ้าภาพมีตัวเลข/เปอร์เซ็นต์/ข้อมูลเฉพาะ ให้ใส่โดยไม่ต้องบอกว่า "จากภาพ"
 - คงตัวเลข/เวลา/จำนวน/ชื่อเฉพาะตามต้นฉบับ
 - เขียนเป็นย่อหน้าต่อเนื่อง เล่าเนื้อหาตรงๆ
-- **แก้ไขคำผิดสะกด** ที่เกิดจากการถอดเสียง
+- แก้ไขคำผิดสะกดที่เกิดจากการถอดเสียง
 
-[เนื้อหา (เสียง + ภาพรวมกัน)]
-{combined_context}
-"""
+ตอบเฉพาะบทความที่สรุปเนื้อหาเท่านั้น"""
 
+    # 6) User prompt - เหลือแค่คำสั่งสั้นๆ + เนื้อหา
+    prompt = f"""สรุปเนื้อหาคลิปวิดีโอนี้เป็นบทความภาษาไทย {length_instruction}
 
-    # 5) เรียก LLM
-    # GEN_OPTS = {
-    #     **GEN_OPTS_QUALITY,
-    #     "num_predict": 900,
-    # }
-    raw = ensure_thai(ollama_summarize(prompt)) or ""
+{combined_context}"""
+
+    # 7) เรียก LLM
+    raw = ensure_thai(ollama_summarize(prompt, system=ARTICLE_SYSTEM)) or ""
     
-    # 6) Post-processing: ลบหัวข้อ/markdown ที่ LLM อาจใส่มา
-    raw = re.sub(r"^#+\s*.+$", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\*\*[^*]+\*\*", "", raw)
-    raw = re.sub(r"\n{3,}", "\n\n", raw)
+    # 7) Post-processing: ลบหัวข้อ/markdown/instructions ที่ LLM อาจใส่มา
+    raw = re.sub(r"^#+\s*.+$", "", raw, flags=re.MULTILINE)  # ลบ headings
+    raw = re.sub(r"\*\*[^*]+\*\*", "", raw)  # ลบ bold
+    raw = re.sub(r"^\*\*ข้อห้าม.*$", "", raw, flags=re.MULTILINE)  # ลบ instruction lines
+    raw = re.sub(r"^\*\*ข้อกำหนด.*$", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^\d+\.\s*ห้าม.*$", "", raw, flags=re.MULTILINE)  # ลบ numbered prohibitions
+    raw = re.sub(r"\[เนื้อหา.*?\]", "", raw)  # ลบ [เนื้อหา...] markers
+    raw = re.sub(r"\[\d+[-–]\d+s?\]", "", raw)  # ลบ timestamp brackets ที่เหลือ
+    raw = re.sub(r"\n{3,}", "\n\n", raw)  # ลด newlines ซ้ำ
     raw = raw.strip()
     
     return raw
@@ -1296,7 +1303,6 @@ def main():
     if transcript is None:
         # 1) โหลดเสียง + ตัดฉาก
         download_audio_wav_16k(YOUTUBE_URL, AUDIO_OUT)
-        duration = get_video_duration(AUDIO_OUT)
         download_t = time.time()
         download_time = download_t - t0
         send_progress("โหลดวิดีโอ", 10, 100)
@@ -1306,7 +1312,6 @@ def main():
     else:
         send_progress("โหลดวิดีโอ", 10, 100)
         send_progress("ถอดเสียง", 45, 100)
-        duration = get_video_duration(AUDIO_OUT)
         download_time = 0 
     
     asr_t = time.time()
@@ -1315,7 +1320,7 @@ def main():
 
     # 3) Caption + OCR
     captioner = VisionCaptioner(VL_MODEL_NAME, VL_DEVICE)
-    stream_scene_frames_and_caption(YOUTUBE_URL, FRAMES_DIR, SCENE_THRESH, CAPTIONS_JSON, captioner, video_duration=duration)
+    duration = stream_scene_frames_and_caption(YOUTUBE_URL, FRAMES_DIR, SCENE_THRESH, CAPTIONS_JSON, captioner, video_duration=duration)
     with open(CAPTIONS_JSON, "r", encoding="utf-8") as f:
         caps = json.load(f)
     scene_ts = [c["ts"] for c in caps if "ts" in c]

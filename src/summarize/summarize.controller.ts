@@ -34,7 +34,8 @@ export class SummarizeController {
     return this.summarizeService.createSummary(
       summarizeRequestDto.youtubeUrl, 
       req.user.id,
-      summarizeRequestDto.whisperTemp
+      summarizeRequestDto.whisperTemp,
+      summarizeRequestDto.youtubeApi
     );
   }
 
