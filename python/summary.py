@@ -43,11 +43,6 @@ import whisper  # openai-whisper
 import textwrap
 
 from datetime import datetime
-from pathlib import Path
-import pandas as pd
-from openpyxl import load_workbook
-
-EXCEL_LOG = "stat.xlsx"
 
 _progress_fp = None
 try:
@@ -90,9 +85,10 @@ VL_DEVICE  = "cuda"     # ใช้กับ Florence เท่านั้น
 VL_MODEL_NAME = "microsoft/Florence-2-base"
 SCENE_THRESH = 0.6
 ENABLE_OCR = False
+USE_YOUTUBE_TRANSCRIPT = True  # ใช้ youtube_transcript_api เป็นทางเลือกแรก (เร็วกว่า Whisper มาก)
 
 # ใช้ 127.0.0.1 กันปัญหา IPv6/localhost บางเครื่อง
-OLLAMA_API = os.environ.get("OLLAMA_API", "http://127.0.0.1:11434/api/generate")
+OLLAMA_API = os.environ.get("OLLAMA_API", "http://127.0.0.1:11434/api/chat")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3:8b")  
 
 # ===== NEW OUTPUT NAMES =====
@@ -101,11 +97,7 @@ FINAL_TXT = "dropdown_list.txt"  # bullet รวม
 FINAL_ARTICLE_TXT = "final_article_th.txt"      # บทความสั้นภาษาไทย
 
 # ===== STRONG THAI-ONLY SYSTEM (อัปเดตให้เข้มแบบร้อยแก้วไทย) =====
-SYSTEM_PROMPT_TH = (
-    "คุณคือผู้สรุปข่าวภาษาไทย ใช้สำนวนข่าวเล่าเรื่อง กระชับ ชัดเจน ไม่ใช้หัวข้อย่อยหรือบูลเล็ต "
-    "หลีกเลี่ยงการพูดซ้ำ และหากอ้างสิ่งที่ยืนยันด้วยภาพให้แทรก (จากภาพ) ภายในประโยค "
-    "คงชื่อเฉพาะ/ตัวย่อ/ตัวเลขตามต้นฉบับ"
-)
+SYSTEM_PROMPT_TH = "ตอบเป็นภาษาไทยเท่านั้น"
 
 # ===== NEW: Generation presets (minimal-safe) =====
 GEN_OPTS_QUALITY = {
@@ -248,8 +240,6 @@ def ollama_summarize(
 
     ollama_ensure_model(OLLAMA_MODEL, base)
 
-    chat_base = base.rsplit("/", 1)[0] + "/chat"
-    opts = sanitize_ollama_options(options)
     payload = {
         "model": OLLAMA_MODEL,
         "stream": False,
@@ -258,10 +248,19 @@ def ollama_summarize(
             {"role": "user", "content": prompt},
         ],
     }
-    if opts:
-        payload["options"] = opts
 
-    resp = requests.post(chat_base, json=payload, timeout=timeout)
+    # Ollama API expects generation options in the "options" key, not at payload level
+    if options:
+        # Filter only allowed Ollama generation options
+        ALLOWED_OPTS = {
+            "temperature", "top_p", "top_k", "repeat_penalty", "repeat_last_n",
+            "num_ctx", "num_predict", "stop", "seed"
+        }
+        filtered_opts = {k: v for k, v in options.items() if k in ALLOWED_OPTS}
+        if filtered_opts:
+            payload["options"] = filtered_opts
+
+    resp = requests.post(base, json=payload, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
     msg = (data.get("message") or {}).get("content", "")
@@ -410,6 +409,7 @@ def delete_all_files_in_directory(directory_path):
             except OSError as e:
                 log(f"Error deleting {file_path}: {e}")
 
+# get duration in sec for DB
 def get_video_duration(video_path: str) -> float:
     """คืนค่าความยาววิดีโอเป็นวินาที (float)"""
     try:
@@ -462,6 +462,7 @@ def ydl_opts_common(outtmpl: str = "%(title).200B.%(ext)s"):
         opts["cookiefile"] = COOKIES_FILE
     return opts
 
+# โหลดเสียงจาก youtube มาเป็น .m4a แล้วแปลงเป็น .wav เพื่อให้ whisper ใช้ได้(ตรงนี้โหลดแบบ bestaudio)
 def download_audio_wav_16k(url: str, out_path: str):
     import yt_dlp
     tmp_in = None
@@ -489,6 +490,7 @@ def download_audio_wav_16k(url: str, out_path: str):
     except: pass
     log(f"✅ Audio saved -> {out_path}")
 
+# โหลดวิดีโอจาก youtube มาเป็น .mp4 เพื่อใช้กับ scene-cut(ตรงนี้โหลดแบบ bv*+ba/b)
 def download_video_file(url: str) -> str:
     import yt_dlp
     outtmpl = "tmp_video.%(ext)s"
@@ -514,7 +516,6 @@ def download_video_file(url: str) -> str:
     return sorted(candidates, key=os.path.getsize, reverse=True)[0]
 
 # ====== STEP 2: ASR (Whisper) ======
-
 def transcribe_whisper(
     wav_path: str,
     model_name: str,
@@ -577,29 +578,127 @@ def transcribe_whisper(
 
     return text, segments
 
-def iapp_asr_api(wav_path: str, wav_name: str) -> str:
-    url = "https://api.iapp.co.th/asr/v3"
-    payload = {'use_asr_pro': '1', 'chunk_size': '7'} #Set to '1' for iApp ASR PRO
-    files=[('file',(wav_name,open(wav_path,'rb'),'application/octet-stream'))]
-    headers = {'apikey': 'demo'}
 
-    response = requests.request("POST", url, headers=headers, data=payload, files=files)
-    data = json.loads(response.text)
-    textlist = [item["text"] for item in data["output"]]
-    text = " ".join(textlist)
-    with open(TRANSCRIPT_TXT, "w", encoding="utf-8") as f: f.write(text)
-    log("✅ Transcription done.")
-    return text
+# ====== STEP 2B: YouTube Transcript API (ทางเลือกที่ 2 - เร็วกว่า Whisper มาก) ======
+def extract_video_id(url: str) -> str:
+    """ดึง video ID จาก YouTube URL"""
+    import re
+    patterns = [
+        r'(?:v=|/v/|youtu\.be/|/embed/|/shorts/)([a-zA-Z0-9_-]{11})',
+        r'^([a-zA-Z0-9_-]{11})$'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return ""
+
+def transcribe_youtube_api(
+    youtube_url: str,
+    language: str = "th",
+    step_start: int = 10,
+    step_end: int = 45,
+) -> tuple[str, List[Dict[str, Any]]]:
+    """
+    ดึง transcript จาก YouTube โดยใช้ youtube_transcript_api
+    เร็วกว่า Whisper มากเพราะไม่ต้องโหลด audio และ process
+    
+    Returns:
+        tuple: (full_text, segments)
+        - full_text: ข้อความทั้งหมด
+        - segments: list of {start, end, text} สำหรับจับคู่กับ visual
+    """
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except ImportError:
+        raise RuntimeError("❌ youtube_transcript_api ไม่ได้ติดตั้ง: pip install youtube-transcript-api")
+    
+    video_id = extract_video_id(youtube_url)
+    if not video_id:
+        raise ValueError(f"❌ ไม่สามารถดึง video ID จาก URL: {youtube_url}")
+    
+    log(f"🔄 Fetching YouTube transcript for video: {video_id}")
+    send_progress("ถอดเสียง", step_start, 0)
+    
+    try:
+        # ใช้ API format ใหม่ (version 1.x)
+        ytt_api = YouTubeTranscriptApi()
+        
+        # ลองดึง transcript - จะพยายามหา transcript ที่เหมาะสมอัตโนมัติ
+        # ลองภาษาไทยก่อน แล้ว fallback เป็นภาษาอื่น
+        transcript_data = None
+        transcript_type = ""
+        
+        try:
+            # ลองดึงภาษาไทยก่อน
+            transcript_data = ytt_api.fetch(video_id, languages=[language, 'th'])
+            transcript_type = f"thai ({language})"
+            log(f"✅ พบ transcript ภาษาไทย")
+        except Exception as e:
+            log(f"⚠️ ไม่พบ transcript ภาษาไทย: {e}")
+            
+            # ลองดึงภาษาใดก็ได้
+            try:
+                transcript_data = ytt_api.fetch(video_id)
+                transcript_type = "auto"
+                log(f"✅ พบ transcript (auto)")
+            except Exception as e2:
+                raise RuntimeError(f"ไม่พบ transcript: {e2}")
+        
+        send_progress("ถอดเสียง", (step_start + step_end) // 2, 50)
+        
+        # แปลงเป็น format เดียวกับ Whisper
+        # เก็บข้อมูลดิบก่อน แล้วค่อยกำหนด end = start ของตัวถัดไป
+        raw_items = []
+        
+        # transcript_data เป็น FetchedTranscript object, iterate ได้เลย
+        for item in transcript_data:
+            start = item.start
+            text = (item.text or '').strip()
+            if text:
+                raw_items.append({"start": start, "text": text})
+        
+        # สร้าง segments โดยใช้ start ของตัวถัดไปเป็น end
+        segments = []
+        full_text_parts = []
+        for i, item in enumerate(raw_items):
+            if i < len(raw_items) - 1:
+                end_time = raw_items[i + 1]["start"]
+            else:
+                # segment สุดท้าย - ใช้ start + duration โดยประมาณ (5 วินาที)
+                end_time = item["start"] + 5.0
+            
+            segments.append({
+                "start": item["start"],
+                "end": end_time,
+                "text": item["text"]
+            })
+            full_text_parts.append(item["text"])
+        
+        full_text = " ".join(full_text_parts)
+        
+        # ถ้า transcript ไม่ใช่ภาษาไทย ให้แปล
+        if not looks_thai(full_text) and len(full_text) > 50:
+            log("🔄 แปล transcript เป็นภาษาไทย...")
+            full_text = ensure_thai(full_text)
+        
+        # บันทึกไฟล์
+        with open(TRANSCRIPT_TXT, "w", encoding="utf-8") as f:
+            f.write(full_text)
+        
+        with open(TRANSCRIPT_SEGMENTS, "w", encoding="utf-8") as f:
+            json.dump(segments, f, ensure_ascii=False, indent=2)
+        
+        send_progress("ถอดเสียง", step_end, 100)
+        log(f"✅ YouTube Transcript done: {len(segments)} segments ({transcript_type})")
+        
+        return full_text, segments
+        
+    except Exception as e:
+        raise RuntimeError(f"❌ YouTube Transcript API error: {e}")
+
 
 # ====== STEP 3: Image Captioning (+ optional OCR) ======
-def clean_tags(tags):
-    out = []
-    for t in (tags or []):
-        t = str(t).strip()
-        if not t or t.startswith("TAGS><loc_"): continue
-        if looks_thai(t) and len(t) <= 20: out.append(t)
-    return sorted(list(set(out)))[:8]
-
 def translate_to_th(text: str, max_chars: int = 200) -> str:
     if not text or looks_thai(text): return text or ""
     prompt = f"แปลข้อความต่อไปนี้เป็นภาษาไทยแบบสั้น กระชับ ไม่เกิน {max_chars} อักขระ:\n{text}"
@@ -709,7 +808,7 @@ class VisionCaptioner:
 
     def run_ocr(self, img: Image.Image) -> str:
         return ""
-
+# download scene frames and caption them
 def stream_scene_frames_and_caption(url: str,
                                     frames_dir: str,
                                     thresh: float,
@@ -721,6 +820,7 @@ def stream_scene_frames_and_caption(url: str,
 
     # ดาวน์โหลดวิดีโอเก็บเป็นไฟล์ชั่วคราว
     video_path = download_video_file(url)
+    duration = get_video_duration(video_path)
 
     def _safe_unlink(p: str):
         try:
@@ -815,6 +915,7 @@ def stream_scene_frames_and_caption(url: str,
         except Exception:
             pass
         _safe_unlink(video_path)
+        return duration
 
 # ====== STEP 4: Merge into scene-level facts ======
 @dataclass
@@ -832,24 +933,7 @@ class SceneFacts:
     visual_caption: str
     ocr_text: str
     tags: List[str]
-
-def split_text_to_scenes(text: str, scene_ts: List[float]) -> List[SceneFacts]:
-    """Legacy function - ใช้สำหรับ backward compatibility"""
-    if not scene_ts: return [SceneFacts(0.0, 0.0, text, "", "", [])]
-    scene_ts = sorted(scene_ts)
-    ts_bounds = scene_ts + [scene_ts[-1] + 99999]
-    chunks = []
-    n = len(scene_ts)
-    avg_len = max(1, len(text)//max(1,n))
-    for i in range(n):
-        seg = text[i*avg_len:(i+1)*avg_len] if i < n-1 else text[i*avg_len:]
-        chunks.append(seg.strip())
-    facts: List[SceneFacts] = []
-    for i in range(n):
-        s = scene_ts[i]; e = ts_bounds[i+1]
-        facts.append(SceneFacts(start=s, end=e, speech=chunks[i], visual_caption="", ocr_text="", tags=[]))
-    return facts
-
+# จับคู่ transcript segments กับ scene timestamps
 def split_segments_to_scenes(
     segments: List[Dict[str, Any]],
     scene_ts: List[float]
@@ -945,7 +1029,7 @@ def split_segments_to_scenes(
         ))
     
     return facts
-
+# ตรวจว่า visual caption เกี่ยวข้องกับ speech หรือไม่/มีข้อมูลที่มีประโยชน์
 def check_visual_relevance(speech: str, visual_caption: str) -> bool:
     """
     ตรวจว่า visual caption เกี่ยวข้องกับ speech หรือไม่
@@ -967,10 +1051,9 @@ def check_visual_relevance(speech: str, visual_caption: str) -> bool:
     
     # Tokenize ทั้งสอง (แบบง่าย)
     def tokenize(text: str) -> set:
-        # ตัดเฉพาะ alphanumeric + ไทย
-        tokens = re.findall(r"[ก-๙a-zA-Z0-9]+", text.lower())
-        # กรอง stopwords และคำสั้นเกินไป
-        return {t for t in tokens if t not in STOPWORDS and len(t) > 1}
+        from pythainlp.tokenize import word_tokenize 
+        tokens = word_tokenize(text, engine="newmm")
+        return {t.lower() for t in tokens if t not in STOPWORDS and len(t) > 1}
     
     speech_tokens = tokenize(speech)
     visual_tokens = tokenize(visual_caption)
@@ -1036,9 +1119,6 @@ def enrich_scenes_with_captions(facts: List[SceneFacts], captions: List[Dict[str
     return facts
 
 # ====== STEP 5: Visual Evidence (domain-agnostic) ======
-EVIDENCE_POLICY = "strict"    # "strict" | "balanced"
-VISUAL_MAX_EVIDENCE = None    # None -> dynamic by #scenes
-
 WEIGHT_MAP = {
     "number": 3, "percent": 3, "timecode": 3, "date": 3,
     "unit": 2, "currency": 2, "keyword_on_screen": 2,
@@ -1074,416 +1154,36 @@ def _detect_signals(txt: str, has_ocr: bool) -> Dict[str, bool]:
         "has_ocr": has_ocr,
     }
 
-def _score_visual_note_generic(txt: str, has_ocr: bool) -> int:
-    penalty = -4 if PROMO_VAGUE_TERMS.search(txt) and EVIDENCE_POLICY == "strict" else \
-              (-2 if PROMO_VAGUE_TERMS.search(txt) else 0)
-    sigs = _detect_signals(txt, has_ocr)
-    score = sum(WEIGHT_MAP[k] for k, v in sigs.items() if v)
-    return score + penalty
-
-def build_visual_corpus(facts: List[SceneFacts],
-                        max_per_scene_chars: int = 220) -> List[str]:
-    pool = []
-    for sc in sorted(facts, key=lambda x: x.start):
-        raw = " ".join(filter(None, [sc.visual_caption, sc.ocr_text])).strip()
-        if not raw:
-            continue
-        vt = re.sub(r"\s+", " ", raw)
-        if len(vt) > max_per_scene_chars:
-            vt = vt[:max_per_scene_chars]
-        has_ocr = bool(sc.ocr_text.strip())
-        s = _score_visual_note_generic(vt, has_ocr)
-        if EVIDENCE_POLICY == "strict" and s < 3:
-            continue
-        if EVIDENCE_POLICY == "balanced" and s < 2:
-            continue
-        pool.append((s, sc.start, sc.end, vt))
-    if not pool:
-        return []
-    pool.sort(key=lambda x: (-x[0], x[1]))
-    n_scenes = len(facts)
-    dynamic_cap = max(3, min(8, max(1, n_scenes // 8)))
-    limit = VISUAL_MAX_EVIDENCE if isinstance(VISUAL_MAX_EVIDENCE, int) else dynamic_cap
-    selected = pool[:limit]
-    return [f"[{st:.1f}–{en:.1f}s] {vt}" for _, st, en, vt in selected]
-
 # ====== STEP 6: Global Summaries (Improved: Transcript + Visual) ======
-PLACEHOLDER_PATTERNS = [
-    r"^ประเด็น(แรก|ที่\s*หนึ่ง|ที่\s*สอง|ที่\s*สาม|สี่|ห้า|หก|เจ็ด|แปด)\s*$",
-    r"^ข้อ(แรก|ที่\s*\d+)\s*$",
-    r"^บูลเล็ต(เสริม)?\s*:?\s*$",
-    r"^สรุป(ย่อ)?\s*:?\s*$",
-    r"^สกัด.+บูลเล็ต.*$",
-]
-NUM_PREFIX_RE = re.compile(r"^\s*(?:[-•]+|\(?\d+\)?\.?|[๑-๙]\.|\d+\)|ข้อ\s*\d+\.?)\s*")
-PLACEHOLDER_RES = [re.compile(p, flags=re.I) for p in PLACEHOLDER_PATTERNS]
-
-def parse_bullets(text: str) -> List[str]:
-    raw = (text or "").splitlines()
-    return [l.strip().lstrip("•-–— ").rstrip() for l in raw if l.strip()]
-
-def clean_bullet(s: str) -> str:
-    s = NUM_PREFIX_RE.sub("", s).strip()
-    s = re.sub(r"\s+", " ", s).strip(" .;:•-—–")
-    return s
-
-def is_placeholder(s: str) -> bool:
-    if not s: return True
-    for rr in PLACEHOLDER_RES:
-        if rr.match(s): return True
-    if "บูลเล็ต" in s and "ห้าม" in s: return True
-    return False
-
-def filter_bullets(items: List[str]) -> List[str]:
-    out = []
-    for it in items:
-        x = clean_bullet(it)
-        if not x: 
-            continue
-        if is_placeholder(x):
-            continue
-        out.append(x)
-    return out
-
-def is_duplicate(new_item: str, existing: List[str], thr: float = 0.6) -> bool:
-    def _tok(s: str) -> List[str]:
-        s = re.sub(r"[^\wก-๙%\.:\-/]", " ", s, flags=re.UNICODE)
-        s = re.sub(r"\s+", " ", s).strip().lower()
-        return s.split()
-    A = set(_tok(new_item))
-    for ex in existing:
-        B = set(_tok(ex))
-        if not A or not B:
-            from difflib import SequenceMatcher
-            if SequenceMatcher(None, new_item, ex).ratio() >= thr:
-                return True
-        else:
-            inter = len(A & B) / max(1, len(A | B))
-            if inter >= thr:
-                return True
-    return False
-
-def score_informativeness(s: str) -> int:
-    sigs = _detect_signals(s, has_ocr=False)
-    return sum(WEIGHT_MAP[k] for k,v in sigs.items() if v)
-
-def dedup_and_rerank(bullets: List[str], max_items: int = 8) -> List[str]:
-    bullets = filter_bullets(bullets)
-    uniq: List[str] = []
-    for b in bullets:
-        if not is_duplicate(b, uniq, thr=0.62):
-            uniq.append(b)
-    ranked = sorted(
-        enumerate(uniq),
-        key=lambda t: (-score_informativeness(t[1]), t[0])
-    )
-    return [uniq[i] for i,_ in ranked][:max_items]
-
-def summarize_transcript_keypoints(transcript: str, min_items=4, max_items=8) -> List[str]:
-    prompt = f"""
-ตอบเป็นภาษาไทยล้วนเท่านั้น ห้ามคัดลอกหัวข้อหรือคำอธิบายจากคำสั่ง
-ห้ามใส่คำว่า "บูลเล็ต", "หัวข้อ", "สรุป", "บูลเล็ตเสริม" ในผลลัพธ์
-ให้ตอบเป็นรายการสั้น ๆ ทีละบรรทัดเท่านั้น (ไม่ต้องมีตัวเลขนำหน้า)
-
-สกัด ประเด็นแก่นจาก TRANSCRIPT จำนวน {min_items}–{max_items} ข้อ
-- เน้นข้อเท็จจริง/ใจความหลัก
-- กระชับ ชัดเจน ไม่ฟุ่มเฟือย
-- ห้ามคัดลอกคำสั่งหรือคำว่า TRANSCRIPT ใด ๆ ลงในคำตอบ
-
-***อย่าเอาข้อความก่อนหน้านี้ไปใส่ในคำตอบ***
-
-=== TRANSCRIPT ===
-{transcript}
-"""
-    out = ollama_summarize(
-        prompt,
-        options={**GEN_OPTS_FAST, "stop": ["\n\n", "\n• ", "\n- "]}
-    ).strip()
-    bullets = parse_bullets(out)
-    bullets = [ensure_thai(b, 220) for b in bullets]
-    return dedup_and_rerank(bullets, max_items=max_items)
-
-def summarize_visual_deltas(
-    visual_notes: List[str],
-    transcript_keys: List[str],
-    max_new: int = 3,
-    min_new: int = 1,
-) -> List[str]:
-    """
-    สรุป 'ข้อเสริมจากภาพ' โดย:
-      - พยายามสร้างอย่างน้อย min_new ข้อ แต่ไม่เกิน max_new ข้อ (ถ้าเนื้อหาพอ)
-      - หลีกเลี่ยงการซ้ำกับ transcript_keys
-      - ถ้า LLM ให้มาน้อยกว่าที่ต้องการ จะมี fallback ดึงจาก visual_notes ตรง ๆ มาช่วยเติม
-    """
-    if not visual_notes:
-        return []
-
-    # กันพารามิเตอร์เพี้ยน
-    max_new = max(1, max_new)
-    min_new = max(1, min(min_new, max_new))
-
-    prompt = f"""
-ตอบเป็นภาษาไทยล้วนเท่านั้น
-ห้ามใช้คำว่า "บูลเล็ต", "หัวข้อ", "สรุป", หรือขึ้นต้นด้วยหัวข้อประกาศ
-ให้ตอบเป็นรายการสั้น ๆ ทีละบรรทัดเท่านั้น (ไม่ต้องมีตัวเลขนำหน้า)
-
-จาก VISUAL NOTES ต่อไปนี้ สร้าง "บรรทัดเสริม" ที่เพิ่มสาระใหม่เท่านั้น
-- ห้ามซ้ำ/พาราฟเรสกับ "รายการแก่น" ด้านล่าง
-- ใช้เฉพาะสิ่งที่ภาพยืนยันได้จริง (ตัวเลข เปอร์เซ็นต์ ชื่อเฉพาะ หัวข้อบนจอ เวลา/ลิงก์)
-- อย่างน้อย {min_new} แต่ไม่เกิน {max_new} บรรทัด
-- ถ้ามาจากภาพ ให้ลงท้ายวงเล็บ (จากภาพ: …) สั้น ๆ
-
-=== รายการแก่น (ห้ามซ้ำ) ===
-{chr(10).join(f"- {k}" for k in transcript_keys)}
-
-=== VISUAL NOTES ===
-{chr(10).join(f"- {v}" for v in visual_notes)}
-"""
-    out = ollama_summarize(
-        prompt,
-        options={**GEN_OPTS_FAST, "stop": ["\n\n", "\n• ", "\n- "]}
-    ).strip()
-
-    candidates = parse_bullets(out)
-    candidates = [ensure_thai(clean_bullet(b), 220) for b in candidates]
-    filtered = [c for c in candidates if not is_duplicate(c, transcript_keys, thr=0.58)]
-    filtered = filter_bullets(filtered)
-
-    # จัดอันดับ + ตัดให้ไม่เกิน max_new ก่อน
-    filtered = dedup_and_rerank(filtered, max_items=max_new)
-
-    # ถ้าได้ครบขั้นต่ำแล้วก็จบเลย
-    if len(filtered) >= min_new:
-        return filtered
-
-    # ---------- FALLBACK: เติมจาก visual_notes โดยตรง ----------
-    fallback = list(filtered)
-    existing_for_dup = transcript_keys + fallback
-
-    for raw in visual_notes:
-        # ตัด timestamp แบบ [0.0–10.0s] ทิ้งก่อน
-        core = re.sub(r"^\[[^\]]+\]\s*", "", raw).strip()
-        if not core:
-            continue
-
-        candidate = ensure_thai(clean_bullet(core), 220)
-        if not candidate:
-            continue
-
-        # กันซ้ำกับทั้ง transcript และของที่มีอยู่แล้ว
-        if is_duplicate(candidate, existing_for_dup, thr=0.58):
-            continue
-
-        text = candidate
-        if not text.rstrip().endswith("(จากภาพ)"):
-            text = text.rstrip() + " (จากภาพ)"
-
-        fallback.append(text)
-        existing_for_dup.append(text)
-
-        if len(fallback) >= min_new:
-            break
-
-    # รอบสุดท้ายจัดอันดับอีกทีแต่พยายามไม่ไปลดจำนวนลงต่ำกว่า min_new
-    max_items = max(max_new, min_new)
-    final = dedup_and_rerank(fallback, max_items=max_items)
-
-    # ถ้าเผลอลดลงอีก (แทบจะไม่เกิด แต่กันไว้) ก็ส่ง fallback ตรง ๆ ไปเลย
-    if len(final) < min_new <= len(fallback):
-        return fallback
-
-    return final
-
-
-def summarize_transcript_global(transcript: str, max_items: int = 8, **kwargs) -> str:
-    keys = summarize_transcript_keypoints(transcript, min_items=4, max_items=max_items)
-    final = dedup_and_rerank(keys, max_items=max_items)
-    return "\n".join(f"• {x}" for x in final)
-
-def pick_visual_captions_by_speech(
-    facts: List[SceneFacts],
-    max_items: int = 4,
-    max_per_scene_chars: int = 220,
-) -> List[str]:
-    """
-    เลือก visual_caption ที่สอดคล้องกับ speech มากที่สุดแบบง่าย ๆ:
-      - ต้องมี visual_caption ไม่ว่าง
-      - ให้คะแนนตามความยาวของ speech (ยิ่งยาวยิ่งมีเนื้อหา)
-      - เลือกคะแนนสูงสุดไม่เกิน max_items
-    """
-    candidates: List[tuple[int, str]] = []
-
-    for sc in facts:
-        if not sc.visual_caption or not sc.visual_caption.strip():
-            continue
-
-        # ความยาว speech ใช้เป็น score แบบง่าย ๆ (ไม่โดน end-start พัง)
-        score = len(sc.speech.strip())
-
-        vt = re.sub(r"\s+", " ", sc.visual_caption).strip()
-        if len(vt) > max_per_scene_chars:
-            vt = vt[:max_per_scene_chars]
-
-        vt = ensure_thai(vt, max_per_scene_chars)
-        candidates.append((score, vt))
-
-    # เรียงจาก score สูง -> ต่ำ แล้วหยิบมาไม่เกิน max_items
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return [cap for _, cap in candidates[:max_items]]
-
-def summarize_transcript_plus_visual_items(
-    transcript: str,
-    facts: List[SceneFacts],
-    max_items: int = 8,
-) -> List[Dict[str, Any]]:
-    # 1) keypoint จาก transcript
-    keys = summarize_transcript_keypoints(
-        transcript,
-        min_items=4,
-        max_items=max_items,
-    )
-
-    # 2) สร้าง visual_notes จาก scene facts
-    visual_notes = pick_visual_captions_by_speech(facts, max_items=4)
-
-    # 3) สรุปจากภาพ "อย่างน้อย 4 ข้อ" (ถ้าข้อมูลพอ) และไม่เกิน 4
-    visual_only_items = summarize_visual_deltas(
-        visual_notes,
-        transcript_keys=[],     # ให้ LLM ไม่สนใจเรื่องกันซ้ำกับ transcript ในขั้นนี้
-        max_new=4,
-        min_new=4,
-    )
-
-    # 4) เตรียม dropdown (จากภาพ) สำหรับเขียนลงไฟล์แยก
-    visual_dropdown: List[Dict[str, str]] = []
-    for txt in visual_only_items:
-        text = txt.rstrip()
-        if "จากภาพ" not in text:
-            text = f"{text} (จากภาพ)"
-        text = ensure_thai(text, 220)
-        visual_dropdown.append({"text": text})
-
-    # 6) เตรียมรายการ transcript + visual แยกกันก่อน
-    transcript_items: List[Dict[str, Any]] = [
-        {"text": ensure_thai(k, 220), "source": "transcript"}
-        for k in keys
-    ]
-    visual_items: List[Dict[str, Any]] = [
-        {"text": v["text"], "source": "visual"}
-        for v in visual_dropdown
-    ]
-
-    # ---- KEY: บังคับให้มี visual อย่างน้อย 4 (ถ้ามีพอ และไม่เกิน max_items) ----
-    desired_visual = min(4, len(visual_items), max_items)
-
-    def info_score(item: Dict[str, Any]) -> int:
-        return score_informativeness(clean_bullet(item["text"]))
-
-    # จัดอันดับเฉพาะ visual ภายในกลุ่มตัวเอง
-    visual_ranked = sorted(
-        enumerate(visual_items),
-        key=lambda t: (-info_score(t[1]), t[0]),
-    )
-
-    uniq: List[Dict[str, Any]] = []
-    seen: List[str] = []
-    used_visual_idx: set[int] = set()
-
-    # 7) เลือก visual ให้ครบ desired_visual ก่อน (ไม่ใช้ is_duplicate ตัดทิ้ง)
-    for idx, item in visual_ranked:
-        if len(uniq) >= desired_visual:
-            break
-        txt = clean_bullet(item["text"])
-        if not txt:
-            continue
-
-        # กัน exact duplicate แบบง่าย ๆ เฉพาะใน visual กันเอง
-        if txt in seen:
-            continue
-
-        uniq.append({"text": txt, "source": "visual"})
-        seen.append(txt)
-        used_visual_idx.add(idx)
-
-    # 8) เติมที่เหลือด้วย (visual ที่ยังไม่ใช้ + transcript) แบบเดิม
-    remaining: List[Dict[str, Any]] = []
-    for i, v in enumerate(visual_items):
-        if i not in used_visual_idx:
-            remaining.append(v)
-    remaining.extend(transcript_items)
-
-    ranked_rest = sorted(
-        enumerate(remaining),
-        key=lambda t: (-info_score(t[1]), t[0]),
-    )
-
-    for _, item in ranked_rest:
-        if len(uniq) >= max_items:
-            break
-
-        txt = clean_bullet(item["text"])
-        if not txt:
-            continue
-
-        # ตอนนี้ค่อยใช้ is_duplicate กันซ้ำระหว่างทุก source
-        if is_duplicate(txt, seen, thr=0.62):
-            continue
-
-        seen.append(txt)
-        uniq.append({"text": txt, "source": item["source"]})
-
-    # 9) ลบ "(จากภาพ)" ออกจากผลลัพธ์สุดท้าย (ตามที่คุณต้องการ)
-    for it in uniq:
-        if it["source"] == "visual":
-            it["text"] = it["text"].replace("(จากภาพ)", "").strip()
-
-    return uniq
-
-
-
-def render_bullets(items: List[Dict[str, Any]]) -> str:
-    return "\n".join(f"• {clean_bullet(x['text'])}" for x in items)
-
-# ===== Few-shot สั้น ๆ กันแตกฟอร์แมต =====
-FEWSHOT_REF = """
-[ตัวอย่างรูปแบบที่ต้องการ]
-อินโทรเกริ่นภาพรวมสั้น ๆ ไม่ขายของ ไม่สรุปแบบหัวข้อ แต่วางบริบทว่าประเด็นหลักคืออะไรและทำไมสำคัญ
-จากนั้นค่อยอธิบายเหตุผล/หลักฐานที่เชื่อมโยงกันเป็นย่อหน้าเดียวหรือสองย่อหน้า โดยตัดการซ้ำคำหรือ
-ซ้ำตัวเลข
-""".strip()
-
-def self_critique_and_rewrite(draft: str, target_min_words: int, target_max_words: int) -> str:
-    check = (
-        "ตรวจร่างข้อความต่อไปนี้แบบย่อ: "
-        "- มีหัวข้อย่อย/บูลเล็ตไหม (ห้าม)? "
-        "- มีประโยคหรือใจความซ้ำไหม? "
-        "- จำนวนคำอยู่ช่วงที่กำหนดหรือยัง? "
-        "หากพบปัญหา ให้ 'เขียนใหม่ทั้งย่อหน้า' ให้ลื่นไหลกว่าเดิม โดยไม่เพิ่มสาระใหม่ "
-        "ถ้าไม่พบปัญหา ให้ส่งร่างเดิมกลับมาเฉย ๆ:\n" + draft
-    )
-    rewritten = ensure_thai(ollama_summarize(check, options=GEN_OPTS_QUALITY))
-    return rewritten if rewritten else draft
-
-# ===== NEW: สร้าง 'บทความสั้น' ภาษาไทย โดยใช้ทั้ง transcript+visual =====
-def summarize_article_th(transcript: str,
-                         items: List[Dict[str, Any]],
+def summarize_article_th(facts: List[SceneFacts],
                          target_min_words: int = None,
                          target_max_words: int = None) -> str:
     """
-    สร้างบทความภาษาไทยจาก transcript + visual bullets
-    ความยาว summary ปรับตามความยาว transcript อัตโนมัติ
+    สร้างบทความภาษาไทยจาก SceneFacts ที่รวม speech + visual_caption ไว้ด้วยกัน
+    ทำให้ LLM เห็น context ว่าภาพอยู่ตรงไหนของเนื้อหา
     """
-    transcript_src = ensure_thai(transcript) or ""
     
-    # คำนวณความยาว transcript (ประมาณ)
-    transcript_word_count = word_count_th(transcript_src)
+    # 1) สร้าง combined context จาก SceneFacts
+    combined_segments = []
+    total_speech = ""
+    for sc in sorted(facts, key=lambda x: x.start):
+        segment = sc.speech
+        if sc.visual_caption:
+            segment += f" (ภาพ: {sc.visual_caption})"
+        if sc.ocr_text:
+            segment += f" (ข้อความบนจอ: {sc.ocr_text})"
+        combined_segments.append(segment)
+        total_speech += sc.speech + " "
+    
+    combined_context = "\n".join(combined_segments)
+    
+    # 2) คำนวณความยาว transcript (ประมาณ)
+    transcript_word_count = word_count_th(total_speech)
     
     # Dynamic target: ปรับความยาวตาม transcript
-    # < 800 คำ: ไม่จำกัด (ให้ LLM สรุปตามเหมาะสม)
-    # >= 800 คำ: 300-400 คำ
     if target_min_words is None or target_max_words is None:
         if transcript_word_count < 800:
-            target_min_words = None  # ไม่จำกัด
+            target_min_words = None
             target_max_words = None
             log(f"📝 Transcript: ~{transcript_word_count} words → No length limit")
         else:
@@ -1491,60 +1191,55 @@ def summarize_article_th(transcript: str,
             target_max_words = 400
             log(f"📝 Transcript: ~{transcript_word_count} words → Target summary: 300-400 words")
     
-    if len(transcript_src) > 12000:
-        head = transcript_src[:5000]
-        mid  = transcript_src[len(transcript_src)//2-1500: len(transcript_src)//2+1500]
-        tail = transcript_src[-5000:]
-        transcript_src = f"{head}\n...\n{mid}\n...\n{tail}"
+    # 3) ตัด context ถ้ายาวเกินไป
+    if len(combined_context) > 12000:
+        head = combined_context[:5000]
+        mid = combined_context[len(combined_context)//2-1500: len(combined_context)//2+1500]
+        tail = combined_context[-5000:]
+        combined_context = f"{head}\n...\n{mid}\n...\n{tail}"
 
-    # เลือกเฉพาะ visual items
-    vis_points = []
-    for x in items:
-        if x.get("source") == "visual":
-            txt = clean_bullet(x["text"])
-            vis_points.append(txt)
-    vis_points = dedup_and_rerank(vis_points, max_items=4)
-
-    # ---- prompt หลัก: ห้ามหัวข้อ, ห้ามแต่งเรื่องเพิ่ม, ห้ามน้ำ ----
+    # 4) สร้าง prompt
     length_instruction = f"ความยาวประมาณ {target_min_words}-{target_max_words} คำ" if target_min_words else "สรุปให้กระชับตามความเหมาะสม"
-    prompt = f"""
-สรุปเนื้อหาด้านล่างให้เป็นบทความภาษาไทย {length_instruction}
+    
+    # 5) System prompt - ย้ายข้อห้าม/ข้อกำหนดทั้งหมดมาไว้ที่นี่
+    ARTICLE_SYSTEM = f"""คุณเป็นนักเขียนบทความภาษาไทยมืออาชีพ ทำหน้าที่สรุปเนื้อหาจากคลิปวิดีโอ
 
-**ข้อห้ามที่ต้องปฏิบัติตามอย่างเคร่งครัด**
-1. ห้ามใส่หัวข้อ/ชื่อบทความ (เช่น **ความสำคัญของ...** หรือ # หัวข้อ) 
+ข้อห้ามที่ต้องปฏิบัติตามอย่างเคร่งครัด:
+1. ห้ามใส่หัวข้อ/ชื่อบทความ (เช่น **ความสำคัญของ...** หรือ # หัวข้อ)
 2. ห้ามใช้ตัวหนา (**) หรือ markdown ใดๆ
 3. ห้ามใช้บูลเล็ต/เลขลิสต์
 4. ห้ามแต่งเรื่องหรือข้อมูลที่ไม่มีในเนื้อหา
-5. ห้ามขึ้นต้นด้วย "สวัสดี", "วันนี้", "บทความนี้", "เราจะมาดู", "ในปัจจุบัน"
-6. ห้ามพูดถึงคำว่า "transcript", "เนื้อหานี้", "ข้อความนี้", "ผู้พูด" - เขียนเป็นเนื้อหาตรงๆ
+5. ห้ามขึ้นต้นด้วย "สวัสดี", "วันนี้", "บทความนี้", "คลิปนี้", "เราจะมาดู", "ในปัจจุบัน"
+6. ห้ามพูดถึงคำว่า "transcript", "เนื้อหานี้", "ข้อความนี้", "ผู้พูด"
+7. ห้ามแสดง instructions หรือข้อกำหนดใดๆ ในคำตอบ
 
-**ข้อกำหนดสำคัญ**
+ข้อกำหนดสำคัญ:
+- เนื้อหาต้นฉบับมาจากคลิปวิดีโอ - ให้สรุปเป็นบทความเล่าเรื่อง
+- รวมข้อมูลจากภาพเข้าเป็นส่วนหนึ่งของเนื้อหาอย่างเป็นธรรมชาติ
+- ถ้าภาพมีตัวเลข/เปอร์เซ็นต์/ข้อมูลเฉพาะ ให้ใส่โดยไม่ต้องบอกว่า "จากภาพ"
 - คงตัวเลข/เวลา/จำนวน/ชื่อเฉพาะตามต้นฉบับ
 - เขียนเป็นย่อหน้าต่อเนื่อง เล่าเนื้อหาตรงๆ
-- ใช้เฉพาะข้อมูลที่มีในเนื้อหาเท่านั้น
+- แก้ไขคำผิดสะกดที่เกิดจากการถอดเสียง
 
-[เนื้อหา]
-{transcript_src}
+ตอบเฉพาะบทความที่สรุปเนื้อหาเท่านั้น"""
 
-[หลักฐานจากภาพ - ใช้เสริมเฉพาะถ้าเกี่ยวข้อง]
-{chr(10).join(f"- {p}" for p in vis_points) if vis_points else "(ไม่มี)"}
-"""
+    # 6) User prompt - เหลือแค่คำสั่งสั้นๆ + เนื้อหา
+    prompt = f"""สรุปเนื้อหาคลิปวิดีโอนี้เป็นบทความภาษาไทย {length_instruction}
 
-    # ---- เรียก LLM "ครั้งเดียว" ----
-    GEN_OPTS = {
-        **GEN_OPTS_QUALITY,
-        "num_predict": 900,
-    }
-    raw = ensure_thai(ollama_summarize(prompt, options=GEN_OPTS)) or ""
+{combined_context}"""
+
+    # 7) เรียก LLM
+    raw = ensure_thai(ollama_summarize(prompt, system=ARTICLE_SYSTEM)) or ""
     
-    # ---- Post-processing: ลบหัวข้อ/markdown ที่ LLM อาจใส่มา ----
-    # ลบ markdown headers
-    raw = re.sub(r"^#+\s*.+$", "", raw, flags=re.MULTILINE)
-    # ลบ **หัวข้อ**
-    raw = re.sub(r"\*\*[^*]+\*\*", "", raw)
-    # ลบบรรทัดว่างหลายบรรทัดติดกัน
-    raw = re.sub(r"\n{3,}", "\n\n", raw)
-    # strip
+    # 7) Post-processing: ลบหัวข้อ/markdown/instructions ที่ LLM อาจใส่มา
+    raw = re.sub(r"^#+\s*.+$", "", raw, flags=re.MULTILINE)  # ลบ headings
+    raw = re.sub(r"\*\*[^*]+\*\*", "", raw)  # ลบ bold
+    raw = re.sub(r"^\*\*ข้อห้าม.*$", "", raw, flags=re.MULTILINE)  # ลบ instruction lines
+    raw = re.sub(r"^\*\*ข้อกำหนด.*$", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^\d+\.\s*ห้าม.*$", "", raw, flags=re.MULTILINE)  # ลบ numbered prohibitions
+    raw = re.sub(r"\[เนื้อหา.*?\]", "", raw)  # ลบ [เนื้อหา...] markers
+    raw = re.sub(r"\[\d+[-–]\d+s?\]", "", raw)  # ลบ timestamp brackets ที่เหลือ
+    raw = re.sub(r"\n{3,}", "\n\n", raw)  # ลด newlines ซ้ำ
     raw = raw.strip()
     
     return raw
@@ -1565,7 +1260,10 @@ def extract_single_keyword_th(text: str) -> str:
 """
     out = ollama_summarize(prompt, options={"temperature": 0.0, "num_ctx": 1024})
     # ตัดบรรทัด/เว้นวรรคให้เหลือแค่คำเดียว
-    keyword = out.strip().split()[0]
+    words = (out or "").strip().split()
+    if not words:
+        return "ไม่พบคำสำคัญ"
+    keyword = words[0]
     keyword = re.sub(r"[^\wก-๙]", "", keyword)
     return keyword or "ไม่พบคำสำคัญ"
 
@@ -1585,25 +1283,44 @@ def main():
     for c in ["ffmpeg", "ffprobe"]:
         check_cmd(c)
 
-    # 1) (เลือก) โหลดเสียง + ตัดฉาก
-    download_audio_wav_16k(YOUTUBE_URL, AUDIO_OUT)
-    duration = get_video_duration(AUDIO_OUT)
-    download_t = time.time()
-    download_time = download_t - t0
-    send_progress("โหลดวิดีโอ", 10, 100)
+    transcript = None
+    segments = None
+    duration = None
+    used_youtube_api = False
+    
+    # 2) Transcript - ลอง YouTube Transcript API ก่อน (ถ้าเปิด)
+    if USE_YOUTUBE_TRANSCRIPT:
+        try:
+            log("📝 ลองใช้ YouTube Transcript API...")
+            transcript, segments = transcribe_youtube_api(YOUTUBE_URL, LANGUAGE, step_start=10, step_end=45)
+            used_youtube_api = True
+            log("✅ ใช้ YouTube Transcript API สำเร็จ!")
+        except Exception as e:
+            log(f"⚠️ YouTube Transcript API ไม่สำเร็จ: {e}")
+            log("🔄 Fallback ไปใช้ Whisper...")
+    
+    # ถ้า YouTube API ไม่สำเร็จ หรือไม่ได้เปิดใช้ -> ใช้ Whisper
+    if transcript is None:
+        # 1) โหลดเสียง + ตัดฉาก
+        download_audio_wav_16k(YOUTUBE_URL, AUDIO_OUT)
+        download_t = time.time()
+        download_time = download_t - t0
+        send_progress("โหลดวิดีโอ", 10, 100)
 
-    # 2) Transcript (บังคับไทย) - ได้ segments พร้อม timestamps
-    transcript, segments = transcribe_whisper(AUDIO_OUT,WHISPER_MODEL,LANGUAGE,ASR_DEVICE,step_start=10,step_end=45)
-    # transcript = iapp_asr_api(AUDIO_OUT, "audio.wav")
+        # Transcript ด้วย Whisper
+        transcript, segments = transcribe_whisper(AUDIO_OUT,WHISPER_MODEL,LANGUAGE,ASR_DEVICE,step_start=10,step_end=45)
+    else:
+        send_progress("โหลดวิดีโอ", 10, 100)
+        send_progress("ถอดเสียง", 45, 100)
+        download_time = 0 
+    
     asr_t = time.time()
-    asr_time = asr_t - download_t
+    asr_time = asr_t - t0 if not used_youtube_api else 0
     send_progress("ถอดเสียง", 45, 100)
-    # with open(TRANSCRIPT_TXT, "r", encoding="utf-8") as f:
-    #     transcript = f.read()
 
     # 3) Caption + OCR
     captioner = VisionCaptioner(VL_MODEL_NAME, VL_DEVICE)
-    stream_scene_frames_and_caption(YOUTUBE_URL, FRAMES_DIR, SCENE_THRESH, CAPTIONS_JSON, captioner, video_duration=duration)
+    duration = stream_scene_frames_and_caption(YOUTUBE_URL, FRAMES_DIR, SCENE_THRESH, CAPTIONS_JSON, captioner, video_duration=duration)
     with open(CAPTIONS_JSON, "r", encoding="utf-8") as f:
         caps = json.load(f)
     scene_ts = [c["ts"] for c in caps if "ts" in c]
@@ -1621,19 +1338,9 @@ def main():
     cap_time = cap_t - asr_t
     send_progress("สร้างคำบรรยายภาพ", 80, 100)
 
-    # 4) สรุปเฉพาะ "Transcript + Visual"
-    items = summarize_transcript_plus_visual_items(transcript, facts, max_items=4)
-    send_progress("ทำสรุป", 85, 33)
-
-    # 5) Save dropdown + bullets + article
-    with open(DROPDOWN_JSON, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
-    bullets_txt = render_bullets(items)
-    with open(FINAL_TXT, "w", encoding="utf-8") as f:
-        f.write(ensure_thai(bullets_txt, max_chars=900))
-
-    article_th = summarize_article_th(transcript, items)
+    article_th = summarize_article_th(facts)
     send_progress("ทำสรุป", 90, 67)
+    
     with open(FINAL_ARTICLE_TXT, "w", encoding="utf-8") as f:
         f.write(wrap_text(article_th))
         
@@ -1641,14 +1348,6 @@ def main():
     send_progress("ทำสรุป", 95, 100)
     summarize_t = time.time()
     summarize_time = summarize_t - cap_t
-
-    log("\n===== DROPDOWN ITEMS (preview) =====")
-    for it in items:
-        tag = "VIS" if it["source"] == "visual" else "TR"
-        log(f"- [{tag}] {it['text']}")
-
-    log("\n===== SUMMARY (TRANSCRIPT + VISUAL) =====")
-    log(bullets_txt or "(empty)")
 
     log("\n===== SHORT ARTICLE (TH) =====")
     log(article_th or "(empty)")
@@ -1667,7 +1366,7 @@ def main():
     try:
         scenes_count = len(scene_ts) if isinstance(scene_ts, list) else None
         captions_count = len(caps) if isinstance(caps, list) else None
-        bullets_count = len(items) if isinstance(items, list) else None
+        bullets_count = 0  # ไม่มี items แล้ว
         article_words = _safe_word_count(FINAL_ARTICLE_TXT)
         transcript_words = _safe_word_count(TRANSCRIPT_TXT)
 

@@ -16,6 +16,12 @@ from datetime import datetime
 API_BASE = "http://localhost:8081"  # Backend URL
 AUTH_BASE = "http://localhost:4005"  # Auth service URL
 TEST_USER_ID = 2
+SYSTEM_PROMPT_TH = (
+    "คุณคือผู้สรุปข่าวภาษาไทย ใช้สำนวนข่าวเล่าเรื่อง กระชับ ชัดเจน ไม่ใช้หัวข้อย่อยหรือบูลเล็ต "
+    "หลีกเลี่ยงการพูดซ้ำ และหากอ้างสิ่งที่ยืนยันด้วยภาพให้แทรก (จากภาพ) ภายในประโยค "
+    "คงชื่อเฉพาะ/ตัวย่อ/ตัวเลขตามต้นฉบับ"
+)
+
 
 # ⚠️ WHISPER_TEMP ที่จะทดสอบ
 WHISPER_TEMPS = [0.0, 0.2, 0.4, 0.6]

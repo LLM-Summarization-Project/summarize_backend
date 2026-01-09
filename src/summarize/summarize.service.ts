@@ -23,7 +23,7 @@ export class SummarizeService {
     });
   }
 
-  async createSummary(youtubeUrl: string, userId: number, whisperTempParam?: number) {
+  async createSummary(youtubeUrl: string, userId: number, whisperTempParam?: number, youtubeApi?: boolean) {
     // Check if cache is disabled via env
     const disableCache = this.configService.get<string>('DISABLE_CACHE') === 'true';
     
@@ -67,7 +67,10 @@ export class SummarizeService {
     // ถ้ามีค่าจาก request body ใช้ค่านั้น, ถ้าไม่มีอ่านจาก .env
     const whisperTemp = whisperTempParam ?? await this.readWhisperTempFromEnvFile();
     console.log(`Using WHISPER_TEMP: ${whisperTemp} (from ${whisperTempParam !== undefined ? 'request' : 'env'})`);
-    await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId, whisperTemp });
+    if (!youtubeApi) {
+      youtubeApi = false
+    }
+    await this.queueService.addRunJob({ summaryId: id, youtubeUrl, userId, whisperTemp, youtubeApi });
 
     return { jobId: id, status: 'QUEUED' as const };
   }
