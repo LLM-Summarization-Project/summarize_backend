@@ -110,8 +110,8 @@ export async function processor(job: Job) {
             process.env.VL_DEVICE ?? 'cpu',
             '--whisper_model',
             process.env.WHISPER_MODEL ?? 'large-v3-turbo',
-            ...(process.env.OLLAMA_API
-                ? ['--ollama_api', process.env.OLLAMA_API]
+            ...(process.env.OLLAMA_API_CHAT
+                ? ['--ollama_api', process.env.OLLAMA_API_CHAT]
                 : ['--ollama_api', 'http://host.docker.internal:11434/api/chat']),
             ...(process.env.OLLAMA_MODEL
                 ? ['--ollama_model', process.env.OLLAMA_MODEL]
