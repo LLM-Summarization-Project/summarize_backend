@@ -1,8 +1,24 @@
-import { startWorker } from "./worker-manager";
+import { startWorker, updateConcurrency } from "./worker-manager";
+import { getConcurrency, subscribeConcurrencyChanges, getRedisConfig } from "../shared/redis-concurrency";
+import Redis from 'ioredis';
 import 'dotenv/config';
 
 async function bootstrap() {
-    await startWorker(Number(process.env.BULL_CONCURRENCY ?? 2))
+    // Get initial concurrency from Redis
+    const redis = new Redis(getRedisConfig());
+    const initialConcurrency = await getConcurrency(redis);
+    await redis.quit();
+    
+    console.log(`[Worker] Starting with concurrency: ${initialConcurrency}`);
+    await startWorker(initialConcurrency);
+    
+    // Subscribe to concurrency changes
+    subscribeConcurrencyChanges((newValue) => {
+        console.log(`[Worker] Received concurrency update: ${newValue}`);
+        updateConcurrency(newValue);
+    });
+    
+    console.log('[Worker] Ready and listening for concurrency changes');
 }
 
 bootstrap();

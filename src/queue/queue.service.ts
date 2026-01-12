@@ -50,7 +50,7 @@ export class QueueService {
     const active = queues.active || 0;
     const waiting = queues.waiting || 0;
 
-    const concurrency = this.systemConfigService.getConcurrency().concurrency;
+    const concurrency = (await this.systemConfigService.getConcurrency()).concurrency;
     const freeSlots = Math.max(concurrency - active, 0);
 
     return {

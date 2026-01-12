@@ -13,7 +13,7 @@ export async function startWorker(concurrency: number) {
 
   worker = new Worker(
     'summarize',
-    processor, // <<< logic ยาว ๆ ของคุณ
+    processor,
     {
       concurrency,
       connection: {
@@ -22,6 +22,18 @@ export async function startWorker(concurrency: number) {
       },
     },
   );
+}
+
+/**
+ * Update worker concurrency dynamically without restarting
+ */
+export function updateConcurrency(newValue: number) {
+  if (worker) {
+    worker.concurrency = newValue;
+    console.log(`[Worker] Concurrency updated to ${newValue}`);
+  } else {
+    console.warn('[Worker] Cannot update concurrency: worker not initialized');
+  }
 }
 
 export function getWorker() {
