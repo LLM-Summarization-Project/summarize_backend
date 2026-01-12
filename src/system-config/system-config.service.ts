@@ -1,19 +1,36 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { startWorker } from 'src/worker/worker-manager';
+import Redis from 'ioredis';
+import { getConcurrency, setConcurrency, getRedisConfig } from '../shared/redis-concurrency';
 
 @Injectable()
-export class SystemConfigService {
-  private concurrency: number;
+export class SystemConfigService implements OnModuleInit {
+  private redis: Redis;
   private startTime: Date;
 
   constructor(private readonly configService: ConfigService) {
-    this.concurrency = Number(this.configService.get('BULL_CONCURRENCY') ?? 2);
+    this.redis = new Redis(getRedisConfig());
     this.startTime = new Date();
   }
 
-  getConcurrency() {
-    return {concurrency: this.concurrency};  
+  async onModuleInit() {
+    // Initialize concurrency in Redis if not set
+    const current = await getConcurrency(this.redis);
+    const envConcurrency = Number(this.configService.get('BULL_CONCURRENCY') ?? 2);
+    
+    // Only set if Redis doesn't have a value yet (first startup)
+    const exists = await this.redis.exists('system:concurrency');
+    if (!exists) {
+      await setConcurrency(this.redis, envConcurrency);
+      console.log(`[SystemConfig] Initialized concurrency to ${envConcurrency}`);
+    } else {
+      console.log(`[SystemConfig] Current concurrency: ${current}`);
+    }
+  }
+
+  async getConcurrency() {
+    const concurrency = await getConcurrency(this.redis);
+    return { concurrency };
   }
 
   getUptime() {
@@ -28,9 +45,7 @@ export class SystemConfigService {
       throw new BadRequestException('Invalid concurrency value');
     }
 
-    this.concurrency = value;
-
-    await startWorker(value);
+    await setConcurrency(this.redis, value);
 
     return { message: 'Concurrency set successfully', concurrency: value };
   }
