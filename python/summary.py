@@ -88,7 +88,7 @@ ENABLE_OCR = False
 USE_YOUTUBE_TRANSCRIPT = True  # ใช้ youtube_transcript_api เป็นทางเลือกแรก (เร็วกว่า Whisper มาก)
 
 # ใช้ 127.0.0.1 กันปัญหา IPv6/localhost บางเครื่อง
-OLLAMA_API = os.environ.get("OLLAMA_API", "http://127.0.0.1:11434/api/chat")
+OLLAMA_API_CHAT = os.environ.get("OLLAMA_API_CHAT", "http://127.0.0.1:11434/api/chat")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3:8b")  
 
 # ===== NEW OUTPUT NAMES =====
@@ -232,7 +232,7 @@ def ollama_summarize(
     stream: bool = False,           # ปิดสตรีมเพื่อความเสถียรและจับข้อความครบ
     timeout: int = 600,
 ) -> str:
-    base = OLLAMA_API
+    base = OLLAMA_API_CHAT
     if system is None:
         system = SYSTEM_PROMPT_TH
     if not ollama_healthcheck(base):
@@ -907,6 +907,13 @@ def stream_scene_frames_and_caption(url: str,
             json.dump(results, f, ensure_ascii=False, indent=2)
         log(f"✅ Captions saved -> {out_json}")
 
+    except Exception as e:
+        log(f"❌ Error in scene captioning: {e}")
+        # ถ้ามี error ก็ให้เขียน empty captions เพื่อไม่ให้ pipeline พัง
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
+        log(f"⚠️ Saved partial/empty captions -> {out_json}")
+
     finally:
         # รอ ffmpeg ปิดให้เรียบร้อยก่อนค่อยลบวิดีโอชั่วคราว (กันไฟล์ล็อก)
         try:
@@ -915,7 +922,8 @@ def stream_scene_frames_and_caption(url: str,
         except Exception:
             pass
         _safe_unlink(video_path)
-        return duration
+    
+    return duration
 
 # ====== STEP 4: Merge into scene-level facts ======
 @dataclass

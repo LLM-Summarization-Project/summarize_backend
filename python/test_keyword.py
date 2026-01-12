@@ -6,7 +6,7 @@ import re
 from typing import Optional, Dict, Any
 
 # CONFIG
-OLLAMA_API = os.environ.get("OLLAMA_API", "http://127.0.0.1:11434/api/generate")
+OLLAMA_API_CHAT = os.environ.get("OLLAMA_API_CHAT", "http://127.0.0.1:11434/api/generate")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3:8b") 
 SYSTEM_PROMPT_TH = "คุณคือผู้ช่วยสรุปความฉลาดสูง ตอบเป็นภาษาไทยเท่านั้น"
 
@@ -44,7 +44,7 @@ def ollama_summarize(
     stream: bool = False,           
     timeout: int = 600,
 ) -> str:
-    base = OLLAMA_API
+    base = OLLAMA_API_CHAT
     if system is None:
         system = SYSTEM_PROMPT_TH
     if not ollama_healthcheck(base):

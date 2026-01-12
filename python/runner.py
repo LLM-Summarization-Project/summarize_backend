@@ -48,8 +48,8 @@ def main():
     print(f"🔧 USE_YOUTUBE_TRANSCRIPT = {use_yt_api}", file=sys.stderr, flush=True)
 
     if args.ollama_api:
-        os.environ["OLLAMA_API"] = args.ollama_api
-        pipeline.OLLAMA_API = args.ollama_api
+        os.environ["OLLAMA_API_CHAT"] = args.ollama_api
+        pipeline.OLLAMA_API_CHAT = args.ollama_api
     if args.ollama_model:
         os.environ["OLLAMA_MODEL"] = args.ollama_model
         pipeline.OLLAMA_MODEL = args.ollama_model

@@ -6,7 +6,7 @@ import requests
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 # CONFIG
-OLLAMA_API = "http://127.0.0.1:11434/api/chat"
+OLLAMA_API_CHAT = "http://127.0.0.1:11434/api/chat"
 # OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3:8b") 
 OLLAMA_MODEL = "scb10x/llama3.1-typhoon2-8b-instruct"
 SYSTEM_PROMPT_TH = "ตอบเป็นภาษาไทยเท่านั้น"
@@ -51,7 +51,7 @@ def ollama_summarize(
     timeout: int = 600,
     stream: bool = True,  # เปิด streaming เป็น default
 ) -> str:
-    base = OLLAMA_API
+    base = OLLAMA_API_CHAT
     if system is None:
         system = SYSTEM_PROMPT_TH
     
