@@ -7,6 +7,7 @@ import { QueueModule } from './queue/queue.module';
 import { ProgressModule } from './summarize/progress.module';
 import { AuthModule } from './auth/auth.module';
 import { SystemConfigModule } from './system-config/system-config.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -14,7 +15,7 @@ import { SystemConfigModule } from './system-config/system-config.module';
     AuthModule, 
     SummarizeModule, 
     QueueModule, 
-    ProgressModule, SystemConfigModule
+    ProgressModule, SystemConfigModule, ChatModule
   ],
   controllers: [AppController],
   providers: [AppService],
