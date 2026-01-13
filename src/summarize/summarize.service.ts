@@ -189,6 +189,7 @@ export class SummarizeService {
         startedAt: true,
         status: true,
         keyword: true,
+        userId: true,
       },
     });
 
