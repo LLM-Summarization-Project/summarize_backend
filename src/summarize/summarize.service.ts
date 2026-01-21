@@ -7,6 +7,7 @@ import * as fs from 'fs/promises';
 import Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { VideoCacheService } from 'src/cache/video-cache.service';
+import axios from 'axios';
 
 @Injectable()
 export class SummarizeService {
@@ -26,12 +27,22 @@ export class SummarizeService {
   async createSummary(youtubeUrl: string, userId: number, whisperTempParam?: number, youtubeApi?: boolean) {
     // Check if cache is disabled via env
     const disableCache = this.configService.get<string>('DISABLE_CACHE') === 'true';
-    
+
     // Cache-first: Check if video already processed (space-based lookup)
     if (!disableCache) {
       const cached = await this.videoCacheService.getCachedSummary(youtubeUrl);
       if (cached) {
         console.log(`Cache HIT for ${youtubeUrl}, returning existing summary`);
+
+        // Background: Try to assign user to topic if keyword exists
+        this.prisma.summary.findUnique({ where: { id: cached.id }, select: { keyword: true } })
+          .then(s => {
+            if (s?.keyword) {
+              this.postAssignUser(userId, s.keyword);
+            }
+          })
+          .catch(err => console.error('Error fetching keyword for cache hit:', err));
+
         return { jobId: cached.id, status: 'CACHED' as const, fromCache: true };
       }
     } else {
@@ -51,6 +62,11 @@ export class SummarizeService {
           status: 'DONE',
         });
         console.log(`DB HIT for ${youtubeUrl}, cached and returning`);
+
+        if (existing.keyword) {
+          this.postAssignUser(userId, existing.keyword);
+        }
+
         return { jobId: existing.id, status: 'CACHED' as const, fromCache: true };
       }
     }
@@ -204,5 +220,21 @@ export class SummarizeService {
       data: { status: 'CANCEL' },
     });
     return { success: true };
+  }
+
+  private async postAssignUser(userId: number, topicName: string) {
+    try {
+      // Use 127.0.0.1 or localhost as appropriate; hardcoded as requested
+      await axios.post('http://localhost:3001/ontology/topic/assign-user', {
+        userId,
+        topicName,
+      });
+      console.log(`[postAssignUser] Successfully assigned user ${userId} to topic "${topicName}"`);
+    } catch (error) {
+      console.error(
+        `[postAssignUser] Failed to assign user ${userId} to topic "${topicName}":`,
+        error?.message ?? error
+      );
+    }
   }
 }
