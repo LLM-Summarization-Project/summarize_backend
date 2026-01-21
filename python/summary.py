@@ -225,20 +225,61 @@ def _post_json(url: str, payload: dict, stream: bool, timeout: int):
     if last_exc:
         raise last_exc
 
+def restart_ollama():
+    """Kill และ restart Ollama process (Windows)"""
+    import platform
+    log("🔄 กำลัง restart Ollama...")
+    try:
+        if platform.system() == "Windows":
+            # Kill ollama.exe
+            subprocess.run(["taskkill", "/IM", "ollama.exe", "/F"], 
+                          capture_output=True, timeout=10)
+            time.sleep(2)
+            # Start ollama serve in background
+            subprocess.Popen(["ollama", "serve"], 
+                           stdout=subprocess.DEVNULL, 
+                           stderr=subprocess.DEVNULL,
+                           creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+        else:
+            # Linux/Mac
+            subprocess.run(["pkill", "-f", "ollama"], capture_output=True, timeout=10)
+            time.sleep(2)
+            subprocess.Popen(["ollama", "serve"], 
+                           stdout=subprocess.DEVNULL, 
+                           stderr=subprocess.DEVNULL)
+        
+        # รอให้ Ollama พร้อม
+        for _ in range(30):  # รอสูงสุด 30 วินาที
+            time.sleep(1)
+            if ollama_healthcheck(OLLAMA_API_CHAT):
+                log("✅ Ollama restart สำเร็จ")
+                return True
+        log("⚠️ Ollama restart แต่ยังไม่พร้อม")
+        return False
+    except Exception as e:
+        log(f"⚠️ ไม่สามารถ restart Ollama ได้: {e}")
+        return False
+
 def ollama_summarize(
     prompt: str,
     options: Optional[Dict[str, Any]] = None,
     system: Optional[str] = None,
     stream: bool = False,           # ปิดสตรีมเพื่อความเสถียรและจับข้อความครบ
-    timeout: int = 600,
+    max_wait: int = 600,           # รอสูงสุด 10 นาที (สำหรับงานยาว)
+    heartbeat_interval: int = 30,   # เช็ค heartbeat ทุก 30 วินาที
+    max_retries: int = 3,           # จำนวน retry สูงสุด
 ) -> str:
+    """
+    เรียก Ollama พร้อม heartbeat monitoring
+    - ถ้า Ollama ยังตอบ healthcheck = กำลังทำงาน รอต่อ
+    - ถ้า healthcheck ไม่ตอบ = ค้าง ให้ restart
+    """
+    import threading
+    import queue
+    
     base = OLLAMA_API_CHAT
     if system is None:
         system = SYSTEM_PROMPT_TH
-    if not ollama_healthcheck(base):
-        raise RuntimeError("❌ ติดต่อ Ollama ไม่ได้: ตรวจสอบว่า `ollama serve` รันอยู่ และพอร์ต 11434 เปิดอยู่")
-
-    ollama_ensure_model(OLLAMA_MODEL, base)
 
     payload = {
         "model": OLLAMA_MODEL,
@@ -249,9 +290,7 @@ def ollama_summarize(
         ],
     }
 
-    # Ollama API expects generation options in the "options" key, not at payload level
     if options:
-        # Filter only allowed Ollama generation options
         ALLOWED_OPTS = {
             "temperature", "top_p", "top_k", "repeat_penalty", "repeat_last_n",
             "num_ctx", "num_predict", "stop", "seed"
@@ -260,11 +299,71 @@ def ollama_summarize(
         if filtered_opts:
             payload["options"] = filtered_opts
 
-    resp = requests.post(base, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    msg = (data.get("message") or {}).get("content", "")
-    return (msg or "").strip()
+    def do_request(result_queue):
+        """Thread function ที่ส่ง request จริง"""
+        try:
+            resp = requests.post(base, json=payload, timeout=max_wait)
+            resp.raise_for_status()
+            data = resp.json()
+            msg = (data.get("message") or {}).get("content", "")
+            result_queue.put(("success", (msg or "").strip()))
+        except Exception as e:
+            result_queue.put(("error", e))
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            # เช็ค healthcheck ก่อนเริ่ม
+            if not ollama_healthcheck(base):
+                log(f"⚠️ Ollama ไม่ตอบ (attempt {attempt}/{max_retries}), กำลัง restart...")
+                if not restart_ollama():
+                    continue
+            
+            ollama_ensure_model(OLLAMA_MODEL, base)
+            
+            # ส่ง request ใน background thread
+            result_queue = queue.Queue()
+            request_thread = threading.Thread(target=do_request, args=(result_queue,))
+            request_thread.daemon = True
+            request_thread.start()
+            
+            # รอผลลัพธ์พร้อมเช็ค heartbeat
+            elapsed = 0
+            while elapsed < max_wait:
+                try:
+                    # รอผลลัพธ์ทุก heartbeat_interval วินาที
+                    status, result = result_queue.get(timeout=heartbeat_interval)
+                    if status == "success":
+                        return result
+                    else:
+                        raise result  # Re-raise exception
+                except queue.Empty:
+                    # ยังไม่ได้ผล - เช็ค heartbeat
+                    elapsed += heartbeat_interval
+                    if ollama_healthcheck(base):
+                        log(f"💓 Ollama ยังทำงานอยู่... (รอแล้ว {elapsed}s)")
+                    else:
+                        log(f"💔 Ollama ไม่ตอบ! กำลัง restart... (รอแล้ว {elapsed}s)")
+                        restart_ollama()
+                        break  # ออกจาก while loop เพื่อ retry
+            else:
+                # รอจน max_wait โดยไม่ได้ผล
+                last_error = f"รอเกิน {max_wait}s"
+                log(f"⚠️ Ollama ไม่ตอบภายใน {max_wait}s")
+                restart_ollama()
+                
+        except requests.exceptions.ConnectionError as e:
+            last_error = f"Connection error: {e}"
+            log(f"⚠️ Ollama connection error (attempt {attempt}/{max_retries})")
+            restart_ollama()
+            
+        except Exception as e:
+            last_error = str(e)
+            log(f"⚠️ Ollama error (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                restart_ollama()
+    
+    raise RuntimeError(f"❌ Ollama ล้มเหลวหลังจาก {max_retries} ครั้ง: {last_error}")
 
 def ensure_thai(text: str, max_chars: int = None) -> str:
     t = (text or "").strip()
