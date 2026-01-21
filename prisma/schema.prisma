@@ -40,7 +40,7 @@ model Summary {
   userId              Int
   whisperTemp         Float?
   user                User          @relation(fields: [userId], references: [id])
-  chatSessions        ChatSession?
+  chatSessions        ChatSession[]
 
   @@index([status, startedAt])
 }
@@ -52,6 +52,7 @@ model User {
   createdAt         DateTime            @default(now())
   role              UserRole            @default(USER)
   summaries         Summary[]
+  chatSessions      ChatSession[]
   UserOntologyTopic UserOntologyTopic[]
 }
 
@@ -91,12 +92,16 @@ model UserOntologyTopic {
 }
 
 model ChatSession {
-  id        Int       @id @default(autoincrement())
-  summaryId String    @unique
-  summary   Summary   @relation(fields: [summaryId], references: [id], onDelete: Cascade)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id        Int           @id @default(autoincrement())
+  summaryId String
+  userId    Int
+  summary   Summary       @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
   messages  ChatMessage[]
+
+  @@unique([summaryId, userId])
 }
 
 model ChatMessage {

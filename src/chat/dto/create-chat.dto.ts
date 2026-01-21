@@ -1,4 +1,4 @@
-import { IsOptional, IsString } from "class-validator";
+import { IsNumber, IsString } from "class-validator";
 
 export class CreateChatDto {
     @IsString()
@@ -6,4 +6,7 @@ export class CreateChatDto {
 
     @IsString()
     summaryId: string;
+
+    @IsNumber()
+    userId: number;
 }
