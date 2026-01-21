@@ -17,7 +17,7 @@ import { LocalJwtAuthGuard } from 'src/auth/jwt-auth.guard';
 @ApiTags('summary')
 @Controller('summary')
 export class SummarizeController {
-  constructor(private readonly summarizeService: SummarizeService) {}
+  constructor(private readonly summarizeService: SummarizeService) { }
 
   @UseGuards(LocalJwtAuthGuard)
   @Post()
@@ -31,8 +31,10 @@ export class SummarizeController {
     },
   })
   createSummary(@Body() summarizeRequestDto: SummarizeRequestDto, @Req() req) {
+    console.log('[DEBUG] createSummary - req.user:', req.user);
+    console.log('[DEBUG] createSummary - userId:', req.user.id);
     return this.summarizeService.createSummary(
-      summarizeRequestDto.youtubeUrl, 
+      summarizeRequestDto.youtubeUrl,
       req.user.id,
       summarizeRequestDto.whisperTemp,
       summarizeRequestDto.youtubeApi

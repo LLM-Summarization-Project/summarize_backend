@@ -399,6 +399,7 @@ export async function processor(job: Job) {
                     }
 
                     try {
+                        console.log('[DEBUG] Calling ontology service with userId:', userId);
                         await axios.post(`http://localhost:8081/ontology/topic`, {
                             userId,
                             name: metrics.keyword,
