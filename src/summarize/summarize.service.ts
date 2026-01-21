@@ -223,17 +223,18 @@ export class SummarizeService {
   }
 
   private async postAssignUser(userId: number, topicName: string) {
+    console.log(`[postAssignUser] Attempting to assign user ${userId} to topic "${topicName}"...`);
     try {
       // Use 127.0.0.1 or localhost as appropriate; hardcoded as requested
-      await axios.post('http://localhost:3001/ontology/topic/assign-user', {
+      const response = await axios.post('http://localhost:3001/ontology/topic/assign-user', {
         userId,
         topicName,
       });
-      console.log(`[postAssignUser] Successfully assigned user ${userId} to topic "${topicName}"`);
+      console.log(`[postAssignUser] SUCCESS: Assigned user ${userId} to topic "${topicName}". Status: ${response.status}`);
     } catch (error) {
       console.error(
-        `[postAssignUser] Failed to assign user ${userId} to topic "${topicName}":`,
-        error?.message ?? error
+        `[postAssignUser] FAILED: Could not assign user ${userId} to topic "${topicName}".`,
+        `Error: ${error?.response?.status ?? 'Unknown Status'} - ${JSON.stringify(error?.response?.data ?? error?.message)}`
       );
     }
   }
