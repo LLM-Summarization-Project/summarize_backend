@@ -400,7 +400,8 @@ export async function processor(job: Job) {
 
                     try {
                         console.log('[DEBUG] Calling ontology service with userId:', userId);
-                        await axios.post(`http://localhost:3002/hypertext/topic`, {
+                        const baseUrl = process.env.ONTOLOGY_SERVICE ?? 'http://localhost:3001';
+                        await axios.post(`${baseUrl}/ontology/topic`, {
                             userId,
                             name: metrics.keyword,
                             description: summaryContent,
