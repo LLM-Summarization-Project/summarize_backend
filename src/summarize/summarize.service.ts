@@ -225,8 +225,8 @@ export class SummarizeService {
   private async postAssignUser(userId: number, topicName: string) {
     console.log(`[postAssignUser] Attempting to assign user ${userId} to topic "${topicName}"...`);
     try {
-      // Use 127.0.0.1 or localhost as appropriate; configured via env
-      const baseUrl = this.configService.get<string>('ONTOLOGY_SERVICE') ?? 'http://localhost:3001';
+      // Use process.env directly since Docker sets this env var
+      const baseUrl = process.env.ONTOLOGY_SERVICE ?? 'http://localhost:3001';
       const response = await axios.post(`${baseUrl}/ontology/topic/assign-user`, {
         userId,
         topicName,
