@@ -37,9 +37,9 @@ export class ChatService {
     const context = rawContent?.replace(/\r\n/g, '') || 'ไม่มีบริบท';
 
     let session = await this.prisma.chatSession.upsert({
-      where: { summaryId: dto.summaryId },
+      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } },
       update: {},
-      create: { summaryId: dto.summaryId }
+      create: { summaryId: dto.summaryId, userId: dto.userId }
     })
 
     const history = await this.prisma.chatMessage.findMany({
@@ -142,9 +142,9 @@ export class ChatService {
 
     // ถ้าไม่มี sessionId → สร้าง ChatSession ใหม่
     let session = await this.prisma.chatSession.upsert({
-      where: { summaryId: dto.summaryId },
+      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } },
       update: {},
-      create: { summaryId: dto.summaryId }
+      create: { summaryId: dto.summaryId, userId: dto.userId }
     })
 
     // ดึงประวัติข้อความทั้งหมดจาก session
