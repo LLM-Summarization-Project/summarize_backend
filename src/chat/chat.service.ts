@@ -11,7 +11,7 @@ import { Observable, Subject } from 'rxjs';
 export class ChatService {
   private ollamaApiUrl: string;
   private ollamaModel: string;
-  
+
   constructor(configService: ConfigService, private prisma: PrismaService) {
     this.ollamaApiUrl = configService.get<string>('OLLAMA_API_CHAT') || 'http://localhost:11434/api/chat';
     this.ollamaModel = configService.get<string>('OLLAMA_MODEL') || 'scb10x/llama3.1-typhoon2-8b-instruct';
@@ -19,41 +19,46 @@ export class ChatService {
 
   // Streaming version สำหรับ SSE
   async createStream(dto: CreateChatDto): Promise<Observable<MessageEvent>> {
-    const summary = await this.prisma.summary.findUnique({ where: {id: dto.summaryId}})
-    if(!summary) {
+    const summary = await this.prisma.summary.findUnique({ where: { id: dto.summaryId } })
+    if (!summary) {
       throw new Error('Summary not found');
+    }
+    if (summary.userId !== dto.userId) {
+      throw new Error('Unauthorized: You do not own this summary');
     }
 
     const normalizedPath = summary.transcriptPath?.replace(/\\/g, '/');
     if (!normalizedPath) {
       throw new Error('Summary file not found');
     }
-    
+
     const filepath = path.resolve(normalizedPath || '');
     const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
     const context = rawContent?.replace(/\r\n/g, '') || 'ไม่มีบริบท';
 
-    let session = await this.prisma.chatSession.upsert({ 
-      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } }, 
-      update: {}, 
+    let session = await this.prisma.chatSession.upsert({
+      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } },
+      update: {},
       create: { summaryId: dto.summaryId, userId: dto.userId }
     })
 
-    const history = await this.prisma.chatMessage.findMany({ 
-      where: { sessionId: session.id }, 
-      orderBy: { createdAt: 'asc'}
+    const history = await this.prisma.chatMessage.findMany({
+      where: { sessionId: session.id },
+      orderBy: { createdAt: 'asc' }
     })
 
     const messages = [
-      { role: 'system', content: `คุณเป็น AI assistant ที่ช่วยตอบคำถามเกี่ยวกับสรุปวิดีโอและสนทนากับผู้ใช้ ตอบเป็นภาษาไทย กระชับและตรงประเด็น
+      {
+        role: 'system', content: `คุณเป็น AI assistant ที่ช่วยตอบคำถามเกี่ยวกับสรุปวิดีโอและสนทนากับผู้ใช้ ตอบเป็นภาษาไทย กระชับและตรงประเด็น
 
 กฎสำคัญมาก:
 1. จดจำทุกสิ่งที่ผู้ใช้บอกในประวัติการสนทนา เช่น ความชอบ ชื่อ ข้อมูลส่วนตัว
 2. เมื่อผู้ใช้ถามว่าข้อมูลส่วนตัวของฉัน ให้ค้นหาในประวัติการสนทนาที่ role=user ว่าผู้ใช้เคยบอกไว้อย่างไร แล้วตอบตามนั้น
 
-บริบทวิดีโอ:\n${context}` },
-      ...history.map(m => ({role : m.role.toLowerCase(), content: m.content})),
-      { role: 'user', content: dto.message}
+บริบทวิดีโอ:\n${context}`
+      },
+      ...history.map(m => ({ role: m.role.toLowerCase(), content: m.content })),
+      { role: 'user', content: dto.message }
     ]
 
     const subject = new Subject<MessageEvent>();
@@ -61,8 +66,8 @@ export class ChatService {
 
     // Call Ollama with streaming
     axios.post(this.ollamaApiUrl, {
-      model: this.ollamaModel, 
-      messages, 
+      model: this.ollamaModel,
+      messages,
       stream: true
     }, {
       responseType: 'stream'
@@ -102,12 +107,12 @@ export class ChatService {
     await this.prisma.$transaction([
       this.prisma.chatMessage.createMany({
         data: [
-          {role: 'USER', content: userMessage, sessionId},
-          {role: 'ASSISTANT', content: assistantReply, sessionId}
+          { role: 'USER', content: userMessage, sessionId },
+          { role: 'ASSISTANT', content: assistantReply, sessionId }
         ]
       }),
       this.prisma.chatSession.update({
-        where: {id: sessionId},
+        where: { id: sessionId },
         data: {}
       })
     ]);
@@ -115,9 +120,12 @@ export class ChatService {
 
   async create(dto: CreateChatDto) {
     // หาสรุปเอา transcript ไปใช้เป็น context
-    const summary = await this.prisma.summary.findUnique({ where: {id: dto.summaryId}})
-    if(!summary) {
+    const summary = await this.prisma.summary.findUnique({ where: { id: dto.summaryId } })
+    if (!summary) {
       throw new Error('Summary not found');
+    }
+    if (summary.userId !== dto.userId) {
+      throw new Error('Unauthorized: You do not own this summary');
     }
 
     const normalizedPath = summary.transcriptPath?.replace(/\\/g, '/');
@@ -125,7 +133,7 @@ export class ChatService {
     if (!normalizedPath) {
       return { status: 'summary_file_not_found' };
     }
-    
+
     const filepath = path.resolve(normalizedPath || '');
 
     const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
@@ -133,36 +141,38 @@ export class ChatService {
     const context = rawContent?.replace(/\r\n/g, '') || 'ไม่มีบริบท';
 
     // ถ้าไม่มี sessionId → สร้าง ChatSession ใหม่
-    let session = await this.prisma.chatSession.upsert({ 
-      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } }, 
-      update: {}, 
+    let session = await this.prisma.chatSession.upsert({
+      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } },
+      update: {},
       create: { summaryId: dto.summaryId, userId: dto.userId }
     })
 
     // ดึงประวัติข้อความทั้งหมดจาก session
-    const history = await this.prisma.chatMessage.findMany({ 
-      where: { sessionId: session.id }, 
-      orderBy: { createdAt: 'asc'}
+    const history = await this.prisma.chatMessage.findMany({
+      where: { sessionId: session.id },
+      orderBy: { createdAt: 'asc' }
     })
 
     // craft messages
     const messages = [
-      { role: 'system', content: `คุณเป็น AI assistant ที่ช่วยตอบคำถามเกี่ยวกับสรุปวิดีโอและสนทนากับผู้ใช้ ตอบเป็นภาษาไทย กระชับและตรงประเด็น
+      {
+        role: 'system', content: `คุณเป็น AI assistant ที่ช่วยตอบคำถามเกี่ยวกับสรุปวิดีโอและสนทนากับผู้ใช้ ตอบเป็นภาษาไทย กระชับและตรงประเด็น
 
 กฎสำคัญมาก:
 1. จดจำทุกสิ่งที่ผู้ใช้บอกในประวัติการสนทนา เช่น ความชอบ ชื่อ ข้อมูลส่วนตัว
 2. เมื่อผู้ใช้ถามว่าข้อมูลส่วนตัวของฉัน ให้ค้นหาในประวัติการสนทนาที่ role=user ว่าผู้ใช้เคยบอกไว้อย่างไร แล้วตอบตามนั้น
 
-บริบทวิดีโอ:\n${context}` },
-      ...history.map(m => ({role : m.role.toLowerCase(), content: m.content})),
-      { role: 'user', content: dto.message}
+บริบทวิดีโอ:\n${context}`
+      },
+      ...history.map(m => ({ role: m.role.toLowerCase(), content: m.content })),
+      { role: 'user', content: dto.message }
     ]
 
     let res, reply;
 
     // call ollama
     try {
-      res = await axios.post(this.ollamaApiUrl, {model: this.ollamaModel, messages, stream: false});
+      res = await axios.post(this.ollamaApiUrl, { model: this.ollamaModel, messages, stream: false });
       reply = res.data.message?.content || '';
     } catch (error) {
       console.error('Error calling Ollama:', error);
@@ -172,15 +182,15 @@ export class ChatService {
     // save latest question and reply
     await this.prisma.$transaction([
       this.prisma.chatMessage.createMany({
-      data: [
-        {role: 'USER', content: dto.message, sessionId: session.id},
-        {role: 'ASSISTANT', content: reply, sessionId: session.id}
-      ]
-    }),
-    this.prisma.chatSession.update({
-      where: {id: session.id},
-      data: {}
-    })
+        data: [
+          { role: 'USER', content: dto.message, sessionId: session.id },
+          { role: 'ASSISTANT', content: reply, sessionId: session.id }
+        ]
+      }),
+      this.prisma.chatSession.update({
+        where: { id: session.id },
+        data: {}
+      })
     ]);
 
     return {
@@ -188,8 +198,14 @@ export class ChatService {
     }
   }
 
-  async history(chatHistoryDto: {summaryId: string, userId: number}) {
-    const session = await this.prisma.chatSession.findUnique({ where: {summaryId_userId: { summaryId: chatHistoryDto.summaryId, userId: chatHistoryDto.userId }}, include: { messages: { orderBy: { createdAt: 'asc' }}}});
+  async history(chatHistoryDto: { summaryId: string, userId: number }) {
+    const session = await this.prisma.chatSession.findFirst({
+      where: {
+        summaryId: chatHistoryDto.summaryId,
+        summary: { userId: chatHistoryDto.userId }
+      },
+      include: { messages: { orderBy: { createdAt: 'asc' } } }
+    });
     return session?.messages || [];
   }
 }
