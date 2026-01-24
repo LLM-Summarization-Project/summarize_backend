@@ -1287,12 +1287,16 @@ def summarize_article_th(facts: List[SceneFacts],
     # 2) คำนวณความยาว transcript (ประมาณ)
     transcript_word_count = word_count_th(total_speech)
     
-    # Dynamic target: ปรับความยาวตาม transcript
+    # Dynamic target: ปรับความยาวตาม transcript (กำหนด target เสมอเพื่อป้องกันสรุปสั้นเกินไป)
     if target_min_words is None or target_max_words is None:
-        if transcript_word_count < 800:
-            target_min_words = None
-            target_max_words = None
-            log(f"📝 Transcript: ~{transcript_word_count} words → No length limit")
+        if transcript_word_count < 300:
+            target_min_words = 100
+            target_max_words = 150
+            log(f"📝 Transcript: ~{transcript_word_count} words → Target summary: 100-150 words")
+        elif transcript_word_count < 800:
+            target_min_words = 150
+            target_max_words = 250
+            log(f"📝 Transcript: ~{transcript_word_count} words → Target summary: 150-250 words")
         else:
             target_min_words = 300
             target_max_words = 400
