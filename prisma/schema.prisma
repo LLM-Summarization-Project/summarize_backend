@@ -37,12 +37,23 @@ model Summary {
   durationSec         Float?
   errorMessage        String?
   keyword             String?
-  userId              Int
   whisperTemp         Float?
-  user                User          @relation(fields: [userId], references: [id])
+  owners              SummaryOwner[]
   chatSessions        ChatSession[]
 
   @@index([status, startedAt])
+}
+
+model SummaryOwner {
+  summaryId String
+  userId    Int
+  createdAt DateTime @default(now())
+
+  summary Summary @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([summaryId, userId])
+  @@index([userId])
 }
 
 model User {
@@ -51,7 +62,7 @@ model User {
   password          String
   createdAt         DateTime            @default(now())
   role              UserRole            @default(USER)
-  summaries         Summary[]
+  ownedSummaries    SummaryOwner[]
   chatSessions      ChatSession[]
   UserOntologyTopic UserOntologyTopic[]
 }

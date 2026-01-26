@@ -19,11 +19,14 @@ export class ChatService {
 
   // Streaming version สำหรับ SSE
   async createStream(dto: CreateChatDto): Promise<Observable<MessageEvent>> {
-    const summary = await this.prisma.summary.findUnique({ where: { id: dto.summaryId } })
+    const summary = await this.prisma.summary.findUnique({ 
+      where: { id: dto.summaryId }, 
+      include: { owners: { where: { userId: dto.userId }}} 
+    })
     if (!summary) {
       throw new Error('Summary not found');
     }
-    if (summary.userId !== dto.userId) {
+    if (summary.owners.length === 0) {
       throw new Error('Unauthorized: You do not own this summary');
     }
 
@@ -120,11 +123,14 @@ export class ChatService {
 
   async create(dto: CreateChatDto) {
     // หาสรุปเอา transcript ไปใช้เป็น context
-    const summary = await this.prisma.summary.findUnique({ where: { id: dto.summaryId } })
+    const summary = await this.prisma.summary.findUnique({ 
+      where: { id: dto.summaryId }, 
+      include: { owners: { where: { userId: dto.userId }}} 
+    })
     if (!summary) {
       throw new Error('Summary not found');
     }
-    if (summary.userId !== dto.userId) {
+    if (summary.owners.length === 0) {
       throw new Error('Unauthorized: You do not own this summary');
     }
 
@@ -202,7 +208,7 @@ export class ChatService {
     const session = await this.prisma.chatSession.findFirst({
       where: {
         summaryId: chatHistoryDto.summaryId,
-        summary: { userId: chatHistoryDto.userId }
+        summary: { owners: { some: { userId: chatHistoryDto.userId } } }
       },
       include: { messages: { orderBy: { createdAt: 'asc' } } }
     });
