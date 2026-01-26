@@ -75,7 +75,7 @@ export class SummarizeService {
     const id = randomUUID();
 
     await this.prisma.summary.create({
-      data: { id, youtubeUrl, status: 'QUEUED', userId },
+      data: { id, youtubeUrl, status: 'QUEUED', owners: { create: { userId }} },
     });
     console.log(`Created summary record with ID: ${id}`);
 
@@ -162,7 +162,7 @@ export class SummarizeService {
 
   async getMySummary(userId: number) {
     const summaries = await this.prisma.summary.findMany({
-      where: { userId, status: 'DONE' },
+      where: { owners: { some: { userId }}, status: 'DONE' },
       orderBy: { startedAt: 'desc' },
       select: {
         id: true,
@@ -205,7 +205,7 @@ export class SummarizeService {
         startedAt: true,
         status: true,
         keyword: true,
-        userId: true,
+        owners: { select: { userId: true }},
       },
     });
 
