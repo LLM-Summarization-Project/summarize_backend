@@ -49,8 +49,9 @@ export class ChatController {
   @Get('/history/:summaryId')
   history(
     @Param('summaryId') summaryId: string,
+    @Query('topicId') topicId: string | undefined,
     @Req() req
   ) {
-    return this.chatService.history({summaryId, userId: req.user.id});
+    return this.chatService.history({summaryId, userId: req.user.id, topicId});
   }
 }

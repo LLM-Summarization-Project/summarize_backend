@@ -9,4 +9,13 @@ export class CreateChatDto {
 
     @IsNumber()
     userId: number;
+
+    @IsString()
+    contextType?: 'transcript' | 'description';
+
+    @IsString()
+    topicId?: string;
+
+    @IsString()
+    customContext?: string;
 }

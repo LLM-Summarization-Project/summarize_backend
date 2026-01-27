@@ -19,31 +19,52 @@ export class ChatService {
 
   // Streaming version สำหรับ SSE
   async createStream(dto: CreateChatDto): Promise<Observable<MessageEvent>> {
-    const summary = await this.prisma.summary.findUnique({ 
-      where: { id: dto.summaryId }, 
-      include: { owners: { where: { userId: dto.userId }}} 
-    })
-    if (!summary) {
-      throw new Error('Summary not found');
-    }
-    if (summary.owners.length === 0) {
-      throw new Error('Unauthorized: You do not own this summary');
+    let context;
+    if (dto.contextType === 'description' && dto.customContext) {
+      context = dto.customContext;
+    } else {
+      const summary = await this.prisma.summary.findUnique({ 
+        where: { id: dto.summaryId }, 
+        include: { owners: { where: { userId: dto.userId }}} 
+      })
+      if (!summary) {
+        throw new Error('Summary not found');
+      }
+      if (summary.owners.length === 0) {
+        throw new Error('Unauthorized: You do not own this summary');
+      }
+
+      const normalizedPath = summary.transcriptPath?.replace(/\\/g, '/');
+      if (!normalizedPath) {
+        throw new Error('Summary file not found');
+      }
+
+      const filepath = path.resolve(normalizedPath || '');
+      const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
+      context = rawContent?.replace(/\r\n/g, '') || 'ไม่มีบริบท';
     }
 
-    const normalizedPath = summary.transcriptPath?.replace(/\\/g, '/');
-    if (!normalizedPath) {
-      throw new Error('Summary file not found');
+    const topicId = dto.topicId ?? null;
+    
+    let session;
+    if (topicId) {
+      // When topicId exists, use compound unique constraint
+      session = await this.prisma.chatSession.upsert({
+        where: { summaryId_userId_topicId: { summaryId: dto.summaryId, userId: dto.userId, topicId } },
+        update: {},
+        create: { summaryId: dto.summaryId, userId: dto.userId, topicId }
+      });
+    } else {
+      // When topicId is null, find or create manually
+      session = await this.prisma.chatSession.findFirst({
+        where: { summaryId: dto.summaryId, userId: dto.userId, topicId: null }
+      });
+      if (!session) {
+        session = await this.prisma.chatSession.create({
+          data: { summaryId: dto.summaryId, userId: dto.userId, topicId: null }
+        });
+      }
     }
-
-    const filepath = path.resolve(normalizedPath || '');
-    const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
-    const context = rawContent?.replace(/\r\n/g, '') || 'ไม่มีบริบท';
-
-    let session = await this.prisma.chatSession.upsert({
-      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } },
-      update: {},
-      create: { summaryId: dto.summaryId, userId: dto.userId }
-    })
 
     const history = await this.prisma.chatMessage.findMany({
       where: { sessionId: session.id },
@@ -123,35 +144,52 @@ export class ChatService {
 
   async create(dto: CreateChatDto) {
     // หาสรุปเอา transcript ไปใช้เป็น context
-    const summary = await this.prisma.summary.findUnique({ 
-      where: { id: dto.summaryId }, 
-      include: { owners: { where: { userId: dto.userId }}} 
-    })
-    if (!summary) {
-      throw new Error('Summary not found');
+    let context;
+    if (dto.contextType === 'description' && dto.customContext) {
+      context = dto.customContext;
+    } else {
+      const summary = await this.prisma.summary.findUnique({ 
+        where: { id: dto.summaryId }, 
+        include: { owners: { where: { userId: dto.userId }}} 
+      })
+      if (!summary) {
+        throw new Error('Summary not found');
+      }
+      if (summary.owners.length === 0) {
+        throw new Error('Unauthorized: You do not own this summary');
+      }
+
+      const normalizedPath = summary.transcriptPath?.replace(/\\/g, '/');
+      if (!normalizedPath) {
+        throw new Error('Summary file not found');
+      }
+
+      const filepath = path.resolve(normalizedPath || '');
+      const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
+      context = rawContent?.replace(/\r\n/g, '') || 'ไม่มีบริบท';
     }
-    if (summary.owners.length === 0) {
-      throw new Error('Unauthorized: You do not own this summary');
+
+    const topicId = dto.topicId ?? null;
+    
+    let session;
+    if (topicId) {
+      // When topicId exists, use compound unique constraint
+      session = await this.prisma.chatSession.upsert({
+        where: { summaryId_userId_topicId: { summaryId: dto.summaryId, userId: dto.userId, topicId } },
+        update: {},
+        create: { summaryId: dto.summaryId, userId: dto.userId, topicId }
+      });
+    } else {
+      // When topicId is null, find or create manually
+      session = await this.prisma.chatSession.findFirst({
+        where: { summaryId: dto.summaryId, userId: dto.userId, topicId: null }
+      });
+      if (!session) {
+        session = await this.prisma.chatSession.create({
+          data: { summaryId: dto.summaryId, userId: dto.userId, topicId: null }
+        });
+      }
     }
-
-    const normalizedPath = summary.transcriptPath?.replace(/\\/g, '/');
-
-    if (!normalizedPath) {
-      return { status: 'summary_file_not_found' };
-    }
-
-    const filepath = path.resolve(normalizedPath || '');
-
-    const rawContent = await fs.readFile(filepath, 'utf-8').catch(() => null);
-
-    const context = rawContent?.replace(/\r\n/g, '') || 'ไม่มีบริบท';
-
-    // ถ้าไม่มี sessionId → สร้าง ChatSession ใหม่
-    let session = await this.prisma.chatSession.upsert({
-      where: { summaryId_userId: { summaryId: dto.summaryId, userId: dto.userId } },
-      update: {},
-      create: { summaryId: dto.summaryId, userId: dto.userId }
-    })
 
     // ดึงประวัติข้อความทั้งหมดจาก session
     const history = await this.prisma.chatMessage.findMany({
@@ -204,11 +242,12 @@ export class ChatService {
     }
   }
 
-  async history(chatHistoryDto: { summaryId: string, userId: number }) {
+  async history(chatHistoryDto: { summaryId: string, userId: number, topicId?: string }) {
     const session = await this.prisma.chatSession.findFirst({
       where: {
         summaryId: chatHistoryDto.summaryId,
-        summary: { owners: { some: { userId: chatHistoryDto.userId } } }
+        summary: { owners: { some: { userId: chatHistoryDto.userId } } },
+        topicId: chatHistoryDto.topicId ?? null
       },
       include: { messages: { orderBy: { createdAt: 'asc' } } }
     });
