@@ -78,6 +78,7 @@ model OntologyTopic {
   OntologyTopicRelation_OntologyTopicRelation_fromTopicIdToOntologyTopic OntologyTopicRelation[] @relation("OntologyTopicRelation_fromTopicIdToOntologyTopic")
   OntologyTopicRelation_OntologyTopicRelation_toTopicIdToOntologyTopic   OntologyTopicRelation[] @relation("OntologyTopicRelation_toTopicIdToOntologyTopic")
   UserOntologyTopic                                                      UserOntologyTopic[]
+  ChatSession                                                            ChatSession[]
 }
 
 model OntologyTopicRelation {
@@ -106,13 +107,16 @@ model ChatSession {
   id        Int           @id @default(autoincrement())
   summaryId String
   userId    Int
+  topicId   String?       @db.Uuid
+  
   summary   Summary       @relation(fields: [summaryId], references: [id], onDelete: Cascade)
   user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic     OntologyTopic? @relation(fields: [topicId], references: [id], onDelete: Cascade)
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   messages  ChatMessage[]
 
-  @@unique([summaryId, userId])
+  @@unique([summaryId, userId, topicId])
 }
 
 model ChatMessage {
