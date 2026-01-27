@@ -205,13 +205,48 @@ export class SummarizeService {
         startedAt: true,
         status: true,
         keyword: true,
-        owners: { select: { userId: true }},
+        owners: { select: { 
+          userId: true, 
+          createdAt: true 
+        }},
       },
     });
 
-    const activeWork = summaries.filter((summary) => summary.status === 'RUNNING');
+    const uniqueMap = new Map<string, typeof summaries[0]>();
 
-    return { summary: summaries, active_worker: activeWork.length };
+    for (const summary of summaries) {
+      const url = summary.youtubeUrl;
+      
+      const myEarliestTime = summary.owners.reduce((earliest, owner) => {
+        return owner.createdAt < earliest ? owner.createdAt : earliest;
+      }, summary.owners[0].createdAt);
+
+      // loop เผื่อมี url ซ้ำกัน
+      if (!uniqueMap.has(url)) {
+        uniqueMap.set(url, summary)
+      } else {
+        const currentChamp = uniqueMap.get(url)!;
+        
+        const champEarliestTime = currentChamp.owners.reduce((earliest, owner) => {
+          return owner.createdAt < earliest ? owner.createdAt : earliest;
+        }, currentChamp.owners[0].createdAt);
+
+        if (myEarliestTime < champEarliestTime) {
+          uniqueMap.set(url, summary);
+        }
+      }
+    }
+
+    const uniqueSummaries = Array.from(uniqueMap.values()).map(summary => {
+      return {
+        ...summary,
+        owner: summary.owners[0].userId, // Map oldest owner's ID to 'owner' field
+      };
+    });
+    
+    const activeWork = uniqueSummaries.filter((summary) => summary.status === 'RUNNING');
+
+    return { summary: uniqueSummaries, active_worker: activeWork.length };
   }
 
   async cancelSummary(summaryId: string) {
