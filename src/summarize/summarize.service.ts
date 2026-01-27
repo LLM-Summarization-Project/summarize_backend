@@ -43,6 +43,8 @@ export class SummarizeService {
           })
           .catch(err => console.error('Error fetching keyword for cache hit:', err));
 
+        await this.ensureSummaryOwner(cached.id, userId);
+
         return { jobId: cached.id, status: 'CACHED' as const, fromCache: true };
       }
     } else {
@@ -66,6 +68,8 @@ export class SummarizeService {
         if (existing.keyword) {
           this.postAssignUser(userId, existing.keyword);
         }
+
+        await this.ensureSummaryOwner(existing.id, userId);
 
         return { jobId: existing.id, status: 'CACHED' as const, fromCache: true };
       }
@@ -242,6 +246,26 @@ export class SummarizeService {
         `[postAssignUser] FAILED: Could not assign user ${userId} to topic "${topicName}".`,
         `Error: ${error?.response?.status ?? 'Unknown Status'} - ${JSON.stringify(error?.response?.data ?? error?.message)}`
       );
+    }
+  }
+
+  private async ensureSummaryOwner(summaryId: string, userId: number) {
+    try {
+      await this.prisma.summaryOwner.upsert({
+        where: {
+          summaryId_userId: {
+            summaryId,
+            userId,
+          },
+        },
+        create: {
+          summaryId,
+          userId,
+        },
+        update: {},
+      });
+    } catch (error) {
+      console.error(`Error ensuring summary owner for user ${userId} and summary ${summaryId}:`, error);
     }
   }
 }
