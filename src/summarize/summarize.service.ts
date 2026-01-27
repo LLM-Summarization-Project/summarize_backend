@@ -195,21 +195,26 @@ export class SummarizeService {
   }
 
   async getAllSummary() {
-    const summaries = await this.prisma.summary.findMany({
-      orderBy: { startedAt: 'desc' },
+    const summaries = await this.prisma.summaryOwner.findMany({
+      orderBy: { createdAt: 'desc' },
       select: {
-        id: true,
-        youtubeUrl: true,
-        percent: true,
-        durationSec: true,
-        startedAt: true,
-        status: true,
-        keyword: true,
-        owners: { select: { userId: true }},
+        userId: true, 
+        createdAt: true,
+        summary: {
+          select: {
+            id: true,
+            youtubeUrl: true,
+            percent: true,
+            durationSec: true,
+            startedAt: true,
+            status: true,
+            keyword: true,
+          }
+        }
       },
     });
-
-    const activeWork = summaries.filter((summary) => summary.status === 'RUNNING');
+    
+    const activeWork = summaries.filter((summary) => summary.summary.status === 'RUNNING');
 
     return { summary: summaries, active_worker: activeWork.length };
   }
