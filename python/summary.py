@@ -1302,12 +1302,24 @@ def summarize_article_th(facts: List[SceneFacts],
             target_max_words = 400
             log(f"📝 Transcript: ~{transcript_word_count} words → Target summary: 300-400 words")
     
-    # 3) ตัด context ถ้ายาวเกินไป
-    if len(combined_context) > 12000:
-        head = combined_context[:5000]
-        mid = combined_context[len(combined_context)//2-1500: len(combined_context)//2+1500]
-        tail = combined_context[-5000:]
-        combined_context = f"{head}\n...\n{mid}\n...\n{tail}"
+    # 3) ถ้าเนื้อหายาวเกินไป ใช้ระบบ "แบ่งสรุปทีละช่วง (Chunking)" เพื่อเก็บรายละเอียดให้ครบ
+    # ช่วยแก้ปัญหา: 1. ข้อมูลตกหล่น (เพราะไม่ต้องตัดทิ้ง) 2. ไม่ค้าง (เพราะส่งทีละน้อย)
+    if len(combined_context) > 8000:
+        log(f"📝 เนื้อหายาว ({len(combined_context)} chars) -> ใช้ระบบแบ่งสรุป (Chunking) {len(combined_context)//6000 + 1} ส่วน")
+        
+        chunk_size = 6000
+        chunks = [combined_context[i:i+chunk_size] for i in range(0, len(combined_context), chunk_size)]
+        
+        partial_summaries = []
+        for i, chunk in enumerate(chunks):
+            p = f"สรุปเนื้อหาส่วนที่ {i+1} จาก {len(chunks)} นี้ให้กระชับ เก็บประเด็นสำคัญให้ครบ เพื่อนำไปรวมกับส่วนอื่น:\n{chunk}"
+            # ใช้ Fast mode เพื่อความรวดเร็ว
+            sub_s = ensure_thai(ollama_summarize(p, options=GEN_OPTS_FAST))
+            partial_summaries.append(sub_s)
+        
+        # รวมผลสรุปย่อยเป็น Context ใหม่สำหรับสรุปสุดท้าย
+        combined_context = "\n---\n".join(partial_summaries)
+        log(f"✅ รวมสรุปย่อยเสร็จสิ้น ({len(combined_context)} chars)")
 
     # 4) สร้าง prompt
     length_instruction = f"ความยาวประมาณ {target_min_words}-{target_max_words} คำ" if target_min_words else "สรุปให้กระชับตามความเหมาะสม"
