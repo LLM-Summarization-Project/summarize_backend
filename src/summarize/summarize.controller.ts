@@ -11,10 +11,11 @@ import {
 } from '@nestjs/common';
 import { SummarizeService } from './summarize.service';
 import { SummarizeRequestDto } from './dto/create-summarize.dto';
-import { ApiCreatedResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiCreatedResponse, ApiTags } from '@nestjs/swagger';
 import { LocalJwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
 @ApiTags('summary')
+@ApiBearerAuth()
 @Controller('summary')
 export class SummarizeController {
   constructor(private readonly summarizeService: SummarizeService) { }
@@ -42,6 +43,29 @@ export class SummarizeController {
   }
 
   @Get('all')
+  @ApiCreatedResponse({
+    description: 'Get all data of summary(duplicated for cache summary)',
+    schema: {
+      example: {
+      "summary": [
+          {
+            "userId": 2,
+            "createdAt": "2026-01-27T16:24:08.247Z",
+            "summary": {
+                "id": "afc2430a-528b-490e-97d1-cc53cdb070ae",
+                "youtubeUrl": "https://youtube.com/shorts/lr_h4-U401I?si=qGOMVNMqVFzdHYqa",
+                "percent": 100,
+                "durationSec": 81.79,
+                "startedAt": "2026-01-27T16:24:11.416Z",
+                "status": "DONE",
+                "keyword": "บังคับ"
+            }
+          } 
+        ],
+      "active_worker": 18
+      }
+    }
+  })
   getAllSummary() {
     return this.summarizeService.getAllSummary();
   }
@@ -111,7 +135,26 @@ export class SummarizeController {
   @ApiCreatedResponse({
     description: 'Get my summary',
     schema: {
-      example: []
+      example: [
+        {
+            "id": "afc2430a-528b-490e-97d1-cc53cdb070ae",
+            "youtubeUrl": "https://youtube.com/shorts/lr_h4-U401I?si=qGOMVNMqVFzdHYqa",
+            "keyword": "บังคับ",
+            "summaryPath": "/app/outputs/2/afc2430a-528b-490e-97d1-cc53cdb070ae/summary.txt",
+            "startedAt": "2026-01-27T16:24:11.416Z",
+            "status": "DONE",
+            "summary": null
+        },
+        {
+            "id": "796e092d-4496-4dee-a8f6-c80e1e8aa309",
+            "youtubeUrl": "https://www.youtube.com/shorts/sLar1RY7yQs",
+            "keyword": "ยูทูบเบอร์",
+            "summaryPath": "/app/outputs/2/796e092d-4496-4dee-a8f6-c80e1e8aa309/summary.txt",
+            "startedAt": "2026-01-27T16:07:01.502Z",
+            "status": "DONE",
+            "summary": null
+        }
+      ]
     },
   })
   getMySummary(@Req() req) {
